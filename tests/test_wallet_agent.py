@@ -83,6 +83,23 @@ def test_import_backup_roundtrip(isolated_home):
     assert info["address"] == exported["address"]
 
 
+def test_polygon_sign_transaction_returns_bytes():
+    """Regression: eth_account 0.14 exposes raw_transaction (not rawTransaction)."""
+    from web3 import Web3
+
+    from nakpix.networks import POLYGON_USDT
+
+    p = polygon.generate()
+    data = "0xa9059cbb" + "1" * 64 + hex(1000000)[2:].rjust(64, "0")
+    tx = {
+        "chainId": 137, "nonce": 0, "gas": 80000,
+        "maxFeePerGas": 60_000_000_000, "maxPriorityFeePerGas": 30_000_000_000,
+        "to": Web3.to_checksum_address(POLYGON_USDT), "value": 0, "data": data,
+    }
+    raw = polygon.sign_transaction(p["private_key"], tx)
+    assert isinstance(raw, bytes) and len(raw) > 0
+
+
 def test_wrong_network_rejected():
     with pytest.raises(manager.WalletError):
         manager.create("bitcoin")

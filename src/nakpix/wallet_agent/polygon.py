@@ -45,4 +45,4 @@ def address_from_private_key(private_key: str) -> str:
 
 def sign_transaction(private_key: str, tx_dict: dict) -> bytes:
     """Sign an already-constructed transaction dict; return raw signed bytes."""
-    return Account.from_key(private_key).sign_transaction(tx_dict).rawTransaction
+    return Account.from_key(private_key).sign_transaction(tx_dict).raw_transaction
