@@ -28,6 +28,21 @@ class PaymentError(Exception):
     pass
 
 
+class BroadcastUncertain(Exception):
+    """The broadcast result is UNKNOWN (e.g. RPC timeout, lost response).
+
+    The signed transaction id (``tx_hash``) was already persisted BEFORE the
+    broadcast, so the caller can reconcile by blockchain hash — the transfer may
+    have been accepted even though the node never confirmed it. This is NOT a
+    definitive failure and must never be recorded as ``failed`` or re-sent.
+    """
+
+    def __init__(self, tx_hash: str, detail: str):
+        super().__init__(detail)
+        self.tx_hash = tx_hash
+        self.detail = detail
+
+
 def _resolve_coupon_fee(client: BackendClient, cupom: str | None, network: str | None) -> tuple[float, str]:
     return coupons_mod.resolve_fee(client, cupom, network)
 
@@ -73,7 +88,13 @@ def _usdt_transfer_data(to_address: str, amount_usdt: float) -> str:
 
 def fund_order_polygon(*, deposit: str, usdt: float, ordem: str, pix_brl: float,
                        chave: str) -> str:
-    """Sign + broadcast the USDT transfer to the deposit address. Returns tx hash."""
+    """Sign + broadcast the USDT transfer to the deposit address. Returns tx hash.
+
+    The tx hash is derivable from the SIGNED bytes, so it is persisted with a
+    ``sending`` status BEFORE the broadcast. If the broadcast raises (RPC
+    timeout / lost response), ``BroadcastUncertain`` is raised — the transfer is
+    NOT recorded as failed and the caller can reconcile by hash later.
+    """
     from web3 import Web3
 
     addr = wallet.address("polygon")
@@ -94,11 +115,21 @@ def fund_order_polygon(*, deposit: str, usdt: float, ordem: str, pix_brl: float,
         "data": _usdt_transfer_data(deposit, usdt),
     }
     raw = wallet.sign_transaction("polygon", tx)
-    tx_hash = w3.eth.send_raw_transaction(raw)
-    h = tx_hash.hex()
+    # Deterministic hash of the signed transaction, known before broadcasting.
+    tx_hash = Web3.keccak(raw).hex()
+    # Persist the identifier BEFORE the broadcast so an uncertain/interrupted
+    # broadcast can always be reconciled by hash (never re-sent).
     storage.record_payment(ordem_id=ordem, pix_brl=pix_brl, chave=chave, network="polygon",
-                           token="USDT", usdt=usdt, tx_hash=h, status="funding")
-    return h
+                           token="USDT", usdt=usdt, tx_hash=tx_hash, status="sending")
+    try:
+        w3.eth.send_raw_transaction(raw)
+    except Exception as e:
+        # UNKNOWN result: the tx may have been accepted but the response lost.
+        # Leave status='sending' (tx_hash already persisted); do NOT mark failed.
+        raise BroadcastUncertain(tx_hash, str(e)[:200]) from e
+    storage.record_payment(ordem_id=ordem, pix_brl=pix_brl, chave=chave, network="polygon",
+                           token="USDT", usdt=usdt, tx_hash=tx_hash, status="funding")
+    return tx_hash
 
 
 def poll_order(client: BackendClient, ordem: str, timeout: int = 300, network: str | None = None) -> dict:
@@ -161,7 +192,14 @@ def pay_pix(
     try:
         tx_hash = fund_order_polygon(deposit=ordem["deposit"], usdt=ordem["usdt"],
                                      ordem=ordem["ordem"], pix_brl=pix_value, chave=chave)
+    except BroadcastUncertain as e:
+        # Uncertain broadcast: the tx_hash is already persisted (status='sending').
+        # Do NOT mark failed; return 'sending' so the caller reconciles by hash.
+        return {"ordem": ordem["ordem"], "tx_hash": e.tx_hash,
+                "status": "sending", "erro": e.detail}
     except Exception as e:
+        # Proven no broadcast (e.g. sign/RPC failure BEFORE any signed tx was
+        # persisted): safe to record a definitive failure.
         storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, chave=chave,
                                network=network, token="USDT", usdt=ordem["usdt"],
                                status="failed", erro=str(e)[:200])

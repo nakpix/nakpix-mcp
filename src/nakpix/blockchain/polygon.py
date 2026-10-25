@@ -77,6 +77,30 @@ class PolygonChain:
         out.sort(key=lambda x: x["block"], reverse=True)
         return out
 
+    def get_tx_state(self, tx_hash: str) -> str:
+        """On-chain state of a broadcast transaction hash.
+
+        Returns one of:
+          - ``"mined"``    — in a block (funds definitively sent);
+          - ``"pending"``  — in the mempool (not yet confirmed);
+          - ``"notfound"`` — not on-chain and not in the mempool (definitively
+            never broadcast / already dropped);
+          - ``"unknown"``  — the RPC did not answer (cannot conclude).
+
+        Used to reconcile an uncertain broadcast: only ``mined``/``notfound`` are
+        conclusive; ``pending``/``unknown`` must be re-checked later.
+        """
+        w3 = self._w3_live()
+        try:
+            tx = w3.eth.get_transaction(tx_hash)
+        except Exception:
+            return "unknown"
+        if tx is None:
+            return "notfound"
+        if tx.get("blockNumber") is not None:
+            return "mined"
+        return "pending"
+
 
 _chain: PolygonChain | None = None
 

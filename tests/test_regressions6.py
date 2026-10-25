@@ -107,7 +107,10 @@ def test_recover_proven_no_funds_expirada(isolated_home):
     assert storage.get_schedule(sid)["status"] == "done"
 
 
-def test_recover_proven_no_funds_notfound(isolated_home):
+def test_recover_notfound_is_inconclusive(isolated_home):
+    # 'notfound' means the backend cannot locate the order yet — it is NOT proof
+    # that no funds were sent (the order may be transiently missing). Keep
+    # 'investigacao', do NOT advance, do NOT mark failed.
     from nakpix import storage
 
     sched = _reload()
@@ -120,8 +123,8 @@ def test_recover_proven_no_funds_notfound(isolated_home):
             return {"status": "notfound"}
 
     assert sched.recover_stale_running(now, Backend()) == 1
-    assert storage.get_occurrence(occ_id)["status"] == "failed"
-    assert storage.get_schedule(sid)["status"] == "done"
+    assert storage.get_occurrence(occ_id)["status"] == "investigacao"
+    assert storage.get_schedule(sid)["status"] == "active"
 
 
 # ── transmission accepted but hash not recorded → reconcile + advance ─────

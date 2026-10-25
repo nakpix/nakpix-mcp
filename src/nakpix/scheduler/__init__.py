@@ -85,12 +85,17 @@ def execute_schedule(schedule: dict, client: BackendClient,
     )
     return {"status": result.get("status"), "ordem": result.get("ordem"),
             "erro": result.get("erro") or result.get("msg"),
-            "resgate": result.get("resgate")}
+            "resgate": result.get("resgate"),
+            "tx_hash": result.get("tx_hash")}
 
 
 _DONE_STATUS = ("sent", "done", "solucionado", "resolved")
 _REFUNDED_STATUS = ("refunded", "extornado")
-_FAILED_STATUS = ("erro", "err", "failed", "notfound")
+# Definitive backend failures — NOT 'notfound' (an order the backend cannot
+# locate yet is inconclusive, not proof of no transfer).
+_FAILED_STATUS = ("erro", "err", "failed")
+# Broadcast attempted but the result is UNKNOWN (RPC timeout / lost response).
+_UNKNOWN_STATUS = ("sending", "unknown")
 
 # Backend order statuses that prove the funds moved (or are moving) — a deposit
 # arrived or the PIX is in flight. Used to reconcile a crash whose broadcast was
@@ -98,11 +103,11 @@ _FAILED_STATUS = ("erro", "err", "failed", "notfound")
 _MOVED_STATUS = ("funding", "sent", "done", "solucionado", "resolved",
                  "refunded", "extornado", "pending", "processing")
 
-# Backend order statuses that PROVE no transfer happened (order never funded /
-# expired / cancelled / unknown to the backend). Distinct from the mere ABSENCE
-# of a local record: these are definitive "no money moved" answers.
-_NO_FUNDS_STATUS = ("expirada", "dead", "inexistente", "notfound",
-                    "cancelada", "cancelado", "cancelled")
+# Backend order statuses that PROVE no transfer happened (order definitively
+# expired / cancelled). Distinct from the mere ABSENCE of a local record, and
+# deliberately EXCLUDING 'notfound'/'inexistente' — an order the backend cannot
+# locate yet is NOT proof that no funds were sent (it may be transient).
+_NO_FUNDS_STATUS = ("expirada", "dead", "cancelada", "cancelado", "cancelled")
 
 
 def _occurrence_status(result_status: str | None) -> str:
@@ -111,7 +116,8 @@ def _occurrence_status(result_status: str | None) -> str:
     A 'pending' PIX (funds sent, still processing) must NOT be recorded as
     'done' — it is tracked to completion by the incident monitor. A refund
     ('refunded'/'extornado') is recorded as its own 'refunded' state — it is
-    NOT a successful PIX and must never read as one.
+    NOT a successful PIX and must never read as one. An uncertain broadcast
+    ('sending'/'unknown') is recorded as 'investigacao' — never 'failed'.
     """
     if result_status in _DONE_STATUS:
         return "done"
@@ -119,6 +125,8 @@ def _occurrence_status(result_status: str | None) -> str:
         return "refunded"
     if result_status in _FAILED_STATUS:
         return "failed"
+    if result_status in _UNKNOWN_STATUS:
+        return "investigacao"
     return "pending"
 
 
@@ -135,6 +143,16 @@ def _advance_schedule(s: dict, due_ts: int) -> None:
         storage.update_schedule(s["id"], status="done", reps_executadas=reps)
     else:
         storage.update_schedule(s["id"], proxima_ocorrencia=nxt, reps_executadas=reps)
+
+
+def _tx_state(tx_hash: str) -> str:
+    """On-chain state of a broadcast hash: 'mined'|'pending'|'notfound'|'unknown'.
+
+    Thin wrapper around the blockchain client so tests can monkeypatch it.
+    """
+    from .blockchain.polygon import get_chain
+
+    return get_chain().get_tx_state(tx_hash)
 
 
 def recover_stale_running(now: int | None = None, client: BackendClient | None = None) -> int:
@@ -192,7 +210,10 @@ def recover_stale_running(now: int | None = None, client: BackendClient | None =
                 resgate=payment.get("resgate"),
                 erro=payment.get("erro") if occ_status == "failed" else None,
             )
-            _advance_schedule(s, r["due_ts"])
+            # An uncertain broadcast ('sending') maps to 'investigacao': do NOT
+            # advance the schedule until the blockchain is consulted by hash.
+            if occ_status != "investigacao":
+                _advance_schedule(s, r["due_ts"])
         elif payment and not payment.get("tx_hash"):
             storage.update_occurrence(
                 r["id"], status="failed", ordem_id=ordem_id,
@@ -275,11 +296,22 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
         ).fetchall()
     for r in rows:
         was_investigacao = r["status"] == "investigacao"
+        tx_hash = r["tx_hash"]
+        if not tx_hash:
+            p = storage.get_payment(r["ordem_id"])
+            if p:
+                tx_hash = p.get("tx_hash")
+
+        # 1) Resolve by the backend (order id). An unreachable backend is not a
+        #    failure — fall through to the blockchain check by hash.
+        bstatus = None
+        st: dict = {}
         try:
             st = client.order_status(r["ordem_id"], None)
+            bstatus = st.get("status")
         except Exception:
-            continue   # backend unreachable — retry next cycle
-        bstatus = st.get("status")
+            bstatus = None
+
         if bstatus in _DONE_STATUS:
             storage.update_occurrence(r["id"], status="done", resgate=st.get("resgate"),
                                       erro=None)
@@ -291,7 +323,8 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
             if was_investigacao:
                 _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
-        elif bstatus in _REFUNDED_STATUS:
+            continue
+        if bstatus in _REFUNDED_STATUS:
             # A confirmed refund is NOT a successful PIX. Record it as its own
             # 'refunded' state and never emit a "Pix pago" message.
             storage.update_occurrence(r["id"], status="refunded",
@@ -304,10 +337,9 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
             if was_investigacao:
                 _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
-        elif bstatus in _FAILED_STATUS or bstatus in _NO_FUNDS_STATUS:
+            continue
+        if bstatus in _FAILED_STATUS:
             erro = st.get("erro") or st.get("msg")
-            if bstatus in _NO_FUNDS_STATUS and not erro:
-                erro = f"ordem {bstatus} sem depósito — transferência não ocorreu"
             storage.update_occurrence(r["id"], status="failed", erro=erro)
             storage.enqueue_notification("agent", {
                 "kind": "scheduled_resolved", "schedule_id": r["schedule_id"],
@@ -317,6 +349,48 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
             if was_investigacao:
                 _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
+            continue
+        if bstatus in _NO_FUNDS_STATUS:
+            # PROVEN no transfer (order expired/cancelled without deposit).
+            erro = f"ordem {bstatus} sem depósito — transferência não ocorreu"
+            storage.update_occurrence(r["id"], status="failed", erro=erro)
+            storage.enqueue_notification("agent", {
+                "kind": "scheduled_resolved", "schedule_id": r["schedule_id"],
+                "ordem_id": r["ordem_id"], "status": "failed",
+                "erro": erro, "ts": int(time.time()),
+            })
+            if was_investigacao:
+                _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
+            reconciled += 1
+            continue
+
+        # 2) Backend inconclusive (processing/pending/funding/notfound/None) —
+        #    consult the blockchain by the persisted tx hash.
+        if not tx_hash:
+            continue   # nothing conclusive — retry next cycle
+        state = _tx_state(tx_hash)
+        if state == "mined":
+            # Funds definitively on-chain → mark pending (PIX reconciliation
+            # continues via the backend) and advance the schedule.
+            if was_investigacao:
+                storage.update_occurrence(r["id"], status="pending")
+                _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
+                reconciled += 1
+            continue
+        if state == "notfound" and was_investigacao:
+            # The signed tx is not on-chain and not in the mempool → the
+            # broadcast definitively never landed → proven no transfer.
+            erro = "transação não encontrada on-chain — transferência não ocorreu"
+            storage.update_occurrence(r["id"], status="failed", erro=erro)
+            storage.enqueue_notification("agent", {
+                "kind": "scheduled_resolved", "schedule_id": r["schedule_id"],
+                "ordem_id": r["ordem_id"], "status": "failed",
+                "erro": erro, "ts": int(time.time()),
+            })
+            _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
+            reconciled += 1
+            continue
+        # 'pending' (mempool) / 'unknown' (RPC) → leave as-is, re-check next cycle.
     return reconciled
 
 
@@ -351,19 +425,26 @@ def run_due(client: BackendClient | None = None) -> int:
             storage.link_occurrence_payment(occ_id, ordem_id=ordem)
 
         res: dict = {"status": "failed"}
+        occ_status = "failed"
         try:
             res = execute_schedule(s, client, on_order_created=_link_ordem)
             occ_status = _occurrence_status(res.get("status"))
             storage.update_occurrence(
                 occ_id, status=occ_status, ordem_id=res.get("ordem"),
+                tx_hash=res.get("tx_hash"),
                 resgate=res.get("resgate") if occ_status == "done" else None,
-                erro=res.get("erro") if occ_status in ("failed", "refunded") else None,
+                erro=res.get("erro") if occ_status in ("failed", "refunded", "investigacao") else None,
             )
         except Exception as e:
+            # An exception escaping pay_pix is a PROVEN failure (e.g. insufficient
+            # balance, sign failure before broadcast) — safe to conclude failed.
             storage.update_occurrence(occ_id, status="failed", erro=str(e)[:300])
             res = {"status": "failed", "erro": str(e)[:300]}
-        # advance schedule
-        _advance_schedule(s, s["proxima_ocorrencia"])
+        # Advance the schedule ONLY on a definitive outcome. An uncertain
+        # broadcast ('sending' → 'investigacao') must NOT advance: the schedule
+        # is settled later once the blockchain/backend confirms the result.
+        if occ_status != "investigacao":
+            _advance_schedule(s, s["proxima_ocorrencia"])
         # notify result
         storage.enqueue_notification("agent", {
             "kind": "scheduled_result",
