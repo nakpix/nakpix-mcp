@@ -79,6 +79,7 @@ class BackendClient:
         fee: float | None = None,
         extorno: str = "",
         brcode: str = "",
+        canal: str = "agente",
         network: str | None = None,
     ) -> dict:
         return self._post(
@@ -90,6 +91,7 @@ class BackendClient:
                 "fee": fee,
                 "extorno": extorno,
                 "brcode": brcode,
+                "canal": canal,
             },
             network,
         )
