@@ -32,9 +32,12 @@ def validate_coupon(client: BackendClient, codigo: str, network: str | None = No
 
 
 def resolve_fee(client: BackendClient, cupom: str | None, network: str | None = None) -> tuple[float, str]:
-    """Return (fee_pct, effective_coupon) — base fee if no/invalid coupon."""
+    """Return (fee_pct, effective_coupon). Auto-applies the persisted default
+    coupon when none is passed; base fee if no/invalid coupon."""
     from .quotes import NAK_FEE_BASE_PCT
 
+    if not cupom:
+        cupom = get_default_coupon() or ""
     if not cupom:
         return NAK_FEE_BASE_PCT, ""
     try:

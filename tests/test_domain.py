@@ -28,6 +28,17 @@ def test_default_coupon(isolated_home):
     assert coupons.get_default_coupon() is None
 
 
+def test_resolve_fee_auto_applies_default_coupon(isolated_home, fake_backend):
+    coupons.set_default_coupon("PARCEIRO10")
+    fee, code = coupons.resolve_fee(fake_backend, None)
+    assert code == "PARCEIRO10"
+    assert fee == 1.5
+    # unknown explicit coupon -> base fee (no silent fallback to default)
+    fee2, code2 = coupons.resolve_fee(fake_backend, "OUTRO")
+    assert code2 == ""
+    assert fee2 == 4.0
+
+
 def test_quote_estimate():
     quote = {"total_brl": 100.0, "total_pxusdt": 20.0}  # 5 BRL/USDT
     cost = quotes.estimate_cost(100.0, 1.5, quote)
