@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nakpix-mcp"
+version = "0.1.0"
+description = "Official NAKPIX MCP Server for AI Agents — crypto-to-PIX payments without a conventional account."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "NAKPIX", email = "suporte@nakswap.xyz" }]
+keywords = ["mcp", "pix", "crypto", "polygon", "solana", "usdt", "agent", "nakpix"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "mcp>=1.2,<2",
+    "httpx>=0.27",
+    "eth-account>=0.13",
+    "web3>=7",
+    "solders>=0.20",
+    "pynacl>=1.5",
+    "cryptography>=42",
+    "argon2-cffi>=23",
+]
+
+[project.scripts]
+nakpix-mcp = "nakpix.server:main"
+nakpix-wallet-agent = "nakpix.wallet_agent.cli:main"
+nakpix-scheduler = "nakpix.scheduler.engine:main"
+nakpix-incidents = "nakpix.incidents:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nakpix = ["py.typed"]

@@ -1,0 +1,33 @@
+# ── NAKPIX MCP — deployment (background services) ─────────────────────
+# The MCP server itself is launched by the agent client (stdio). These two
+# long-running services are what keep scheduled payments and the 15-minute
+# incident monitor alive even when no agent conversation is open.
+#
+#   docker compose up -d
+#
+services:
+  scheduler:
+    build: .
+    image: nakpix-mcp:latest
+    command: ["nakpix-scheduler"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NAKPIX_HOME: /nakpix
+    volumes:
+      - nakpix-data:/nakpix
+
+  incidents:
+    build: .
+    image: nakpix-mcp:latest
+    command: ["nakpix-incidents"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NAKPIX_HOME: /nakpix
+      NAKPIX_INCIDENT_MINUTES: ${NAKPIX_INCIDENT_MINUTES:-15}
+    volumes:
+      - nakpix-data:/nakpix
+
+volumes:
+  nakpix-data:

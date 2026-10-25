@@ -1,0 +1,14 @@
+.git
+.env
+.gitignore
+__pycache__
+*.pyc
+*.egg-info
+.venv
+venv
+build
+dist
+.nakpix
+tests
+docs
+examples
