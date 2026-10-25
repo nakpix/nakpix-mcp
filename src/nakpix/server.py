@@ -476,8 +476,9 @@ def nakpix_report_incident_email(incident_id: int, outcome: str) -> dict:
     elif outcome == "failed":
         attempts = int(inc.get("email_attempts") or 0) + 1
         if attempts < MAX_EMAIL_ATTEMPTS:
-            # retry: reset to pending and clear the dispatch marker so the
-            # monitor re-enqueues the notification.
+            # retry: clear the in-flight notification (so the monitor can queue
+            # exactly ONE fresh one) and reset to pending.
+            storage.mark_incident_notification_delivered(incident_id)
             storage.update_incident(incident_id, email_state="pending",
                                     email_attempts=attempts, email_ts=None)
             final = "pending"

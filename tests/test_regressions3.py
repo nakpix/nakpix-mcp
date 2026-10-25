@@ -39,7 +39,7 @@ def test_run_due_pending_occurrence_not_done(isolated_home, monkeypatch):
     # funds sent, still processing
     monkeypatch.setattr(
         sched, "execute_schedule",
-        lambda s, c: {"status": "pending", "ordem": "PX_PEND"},
+        lambda s, c, on_order_created=None: {"status": "pending", "ordem": "PX_PEND"},
     )
 
     class NoopClient:
@@ -95,7 +95,7 @@ def test_run_due_recovers_stale_running_before_processing(isolated_home, monkeyp
     calls = []
     monkeypatch.setattr(
         sched, "execute_schedule",
-        lambda s, c: calls.append(s["id"]) or {"status": "sent", "ordem": "PX_X"},
+        lambda s, c, on_order_created=None: calls.append(s["id"]) or {"status": "sent", "ordem": "PX_X"},
     )
 
     class NoopClient:

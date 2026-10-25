@@ -125,10 +125,13 @@ def scan_once(client: BackendClient | None = None) -> int:
                 continue
             inc = storage.create_incident(dedup_key=ordem or p.get("tx_hash") or str(p.get("id")),
                                           ordem_id=ordem)
-            # Dispatch the incident notification exactly once (and re-dispatch
-            # after a failed attempt, up to MAX_EMAIL_ATTEMPTS). The AGENT sends
-            # the email to suporte@nakswap.xyz — the MCP never sends email.
-            if inc.get("email_state") == "pending" and not inc.get("email_ts"):
+            # Dispatch the incident notification exactly once per in-flight
+            # attempt: skip if a pending notification for this incident already
+            # exists (a failed attempt leaves none behind), so a retry can never
+            # queue a duplicate. The AGENT sends the email to
+            # suporte@nakswap.xyz — the MCP never sends email.
+            if (inc.get("email_state") == "pending" and not inc.get("email_ts")
+                    and not storage.has_pending_incident_notification(inc["id"])):
                 subject, body = build_incident_email(p, order_status)
                 storage.update_incident(inc["id"], email_ts=int(time.time()))
                 storage.enqueue_notification("agent", {

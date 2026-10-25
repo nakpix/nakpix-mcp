@@ -58,8 +58,13 @@ def _days_in_month(year: int, month: int) -> int:
     return calendar.monthrange(year, month)[1]
 
 
-def execute_schedule(schedule: dict, client: BackendClient) -> dict:
-    """Execute one due schedule occurrence (respects reminder_only)."""
+def execute_schedule(schedule: dict, client: BackendClient,
+                     on_order_created=None) -> dict:
+    """Execute one due schedule occurrence (respects reminder_only).
+
+    ``on_order_created(ordem_id)`` is invoked the moment the order is created
+    and BEFORE any funds move, so the caller can persist the explicit
+    occurrence→order association (crash-safe recovery relies on it)."""
     if schedule.get("reminder_only"):
         storage.enqueue_notification("agent", {
             "kind": "reminder",
@@ -76,13 +81,15 @@ def execute_schedule(schedule: dict, client: BackendClient) -> dict:
         chave=schedule["chave"],
         cupom=schedule.get("cupom"),
         network=schedule.get("network") or "polygon",
+        on_order_created=on_order_created,
     )
     return {"status": result.get("status"), "ordem": result.get("ordem"),
             "erro": result.get("erro") or result.get("msg"),
             "resgate": result.get("resgate")}
 
 
-_DONE_STATUS = ("sent", "done", "solucionado", "refunded", "extornado", "resolved")
+_DONE_STATUS = ("sent", "done", "solucionado", "resolved")
+_REFUNDED_STATUS = ("refunded", "extornado")
 _FAILED_STATUS = ("erro", "err", "failed", "notfound")
 
 
@@ -90,10 +97,14 @@ def _occurrence_status(result_status: str | None) -> str:
     """Map a pay_pix result status to an occurrence status.
 
     A 'pending' PIX (funds sent, still processing) must NOT be recorded as
-    'done' — it is tracked to completion by the incident monitor.
+    'done' — it is tracked to completion by the incident monitor. A refund
+    ('refunded'/'extornado') is recorded as its own 'refunded' state — it is
+    NOT a successful PIX and must never read as one.
     """
     if result_status in _DONE_STATUS:
         return "done"
+    if result_status in _REFUNDED_STATUS:
+        return "refunded"
     if result_status in _FAILED_STATUS:
         return "failed"
     return "pending"
@@ -114,17 +125,26 @@ def _advance_schedule(s: dict, due_ts: int) -> None:
         storage.update_schedule(s["id"], proxima_ocorrencia=nxt, reps_executadas=reps)
 
 
-def recover_stale_running(now: int | None = None) -> int:
+def recover_stale_running(now: int | None = None, client: BackendClient | None = None) -> int:
     """Recover occurrences left ``running`` by a crashed previous run.
 
     Only occurrences past the execution deadline are considered (a recent
-    ``running`` row may still belong to a live worker). For each stale one:
+    ``running`` row may still belong to a live worker). Recovery uses ONLY the
+    explicit occurrence→order association recorded before funds moved — never a
+    key+value+network guess (which can collide with an unrelated manual
+    payment):
 
-    - if a payment record exists for this execution (transfer was sent), recover
-      its ordem_id/resgate and map the real financial status, then advance the
+    - no ``ordem_id`` on the occurrence → no order was ever created, so no
+      money moved: keep it in ``investigacao``, do NOT advance and do NOT
+      re-send;
+    - ``ordem_id`` present + payment record with ``tx_hash`` → the transfer was
+      broadcast and recorded: recover its status/resgate/hash and advance the
       schedule (the incident monitor keeps tracking it if still pending);
-    - otherwise there is no evidence of a transfer: keep the occurrence in the
-      ``investigacao`` state, do NOT advance the schedule and do NOT re-send.
+    - ``ordem_id`` present + payment record without ``tx_hash`` → funding never
+      broadcast (e.g. insufficient balance): mark failed and advance;
+    - ``ordem_id`` present + no local payment → the transmission happened but
+      the result was never recorded: ask the backend for the real order status
+      and reconcile from it (or mark failed when no deposit ever arrived).
     """
     storage.init()
     now = now or int(time.time())
@@ -137,25 +157,62 @@ def recover_stale_running(now: int | None = None) -> int:
         ).fetchall()
     for r in rows:
         s = storage.get_schedule(r["schedule_id"])
-        payment = None
-        if s:
-            payment = storage.find_payment_for_schedule(
-                chave=s["chave"], valor_brl=s["valor_brl"],
-                network=s.get("network") or "polygon",
-                since_ts=(r["executed_ts"] or 0) - 60,
+        ordem_id = r["ordem_id"]
+        if not ordem_id:
+            # No order created → no funds moved. Never guess a payment by
+            # key+value. Manual investigation, do NOT advance / re-send.
+            storage.update_occurrence(
+                r["id"], status="investigacao",
+                erro="recuperação: sem ordem criada (sem evidência de transferência)",
             )
-        if payment:
+            recovered += 1
+            continue
+
+        payment = storage.get_payment(ordem_id)
+        if payment and payment.get("tx_hash"):
             occ_status = _occurrence_status(payment.get("status"))
             storage.update_occurrence(
-                r["id"], status=occ_status, ordem_id=payment.get("ordem_id"),
-                resgate=payment.get("resgate"), erro=None,
+                r["id"], status=occ_status, ordem_id=ordem_id,
+                tx_hash=payment.get("tx_hash"),
+                resgate=payment.get("resgate"),
+                erro=payment.get("erro") if occ_status == "failed" else None,
+            )
+            _advance_schedule(s, r["due_ts"])
+        elif payment and not payment.get("tx_hash"):
+            storage.update_occurrence(
+                r["id"], status="failed", ordem_id=ordem_id,
+                erro=payment.get("erro") or "financiamento não transmitido",
             )
             _advance_schedule(s, r["due_ts"])
         else:
-            storage.update_occurrence(
-                r["id"], status="investigacao",
-                erro="recuperação: sem evidência de transferência on-chain",
-            )
+            # Transmission happened but the result was never recorded: consult
+            # the backend by the EXPLICIT order id (never by key+value).
+            bstatus = None
+            resgate = None
+            erro = None
+            if client is not None:
+                try:
+                    st = client.order_status(ordem_id, s.get("network") if s else None)
+                    bstatus = st.get("status")
+                    resgate = st.get("resgate")
+                    erro = st.get("erro") or st.get("msg")
+                except Exception as e:
+                    erro = str(e)[:120]
+            if bstatus in ("funding", "sent", "done", "solucionado", "resolved",
+                           "refunded", "extornado", "pending", "processing"):
+                occ_status = _occurrence_status(bstatus)
+                storage.update_occurrence(
+                    r["id"], status=occ_status, ordem_id=ordem_id,
+                    resgate=resgate,
+                    erro=erro if occ_status == "failed" else None,
+                )
+                _advance_schedule(s, r["due_ts"])
+            else:
+                storage.update_occurrence(
+                    r["id"], status="failed", ordem_id=ordem_id,
+                    erro="ordem criada sem depósito confirmado (sem transferência)",
+                )
+                _advance_schedule(s, r["due_ts"])
         recovered += 1
     return recovered
 
@@ -186,6 +243,17 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
                 "resgate": st.get("resgate"), "ts": int(time.time()),
             })
             reconciled += 1
+        elif bstatus in _REFUNDED_STATUS:
+            # A confirmed refund is NOT a successful PIX. Record it as its own
+            # 'refunded' state and never emit a "Pix pago" message.
+            storage.update_occurrence(r["id"], status="refunded",
+                                      erro=f"estorno confirmado ({bstatus})")
+            storage.enqueue_notification("agent", {
+                "kind": "scheduled_resolved", "schedule_id": r["schedule_id"],
+                "ordem_id": r["ordem_id"], "status": "refunded",
+                "resgate": st.get("resgate"), "ts": int(time.time()),
+            })
+            reconciled += 1
         elif bstatus in _FAILED_STATUS:
             storage.update_occurrence(r["id"], status="failed",
                                       erro=st.get("erro") or st.get("msg"))
@@ -203,7 +271,7 @@ def run_due(client: BackendClient | None = None) -> int:
     storage.init()
     client = client or BackendClient()
     now = int(time.time())
-    recover_stale_running(now)
+    recover_stale_running(now, client)
     executed = 0
     for s in storage.due_schedules(now):
         sched_id = s["id"]
@@ -222,14 +290,20 @@ def run_due(client: BackendClient | None = None) -> int:
         if occ_id is None:   # raced with another run — already scheduled
             continue
         storage.update_occurrence(occ_id, status="running", executed_ts=now)
+
+        # Persist the occurrence→order association the moment the order is
+        # created and BEFORE funds move (crash-safe recovery relies on it).
+        def _link_ordem(ordem: str) -> None:
+            storage.link_occurrence_payment(occ_id, ordem_id=ordem)
+
         res: dict = {"status": "failed"}
         try:
-            res = execute_schedule(s, client)
+            res = execute_schedule(s, client, on_order_created=_link_ordem)
             occ_status = _occurrence_status(res.get("status"))
             storage.update_occurrence(
                 occ_id, status=occ_status, ordem_id=res.get("ordem"),
                 resgate=res.get("resgate") if occ_status == "done" else None,
-                erro=res.get("erro") if occ_status == "failed" else None,
+                erro=res.get("erro") if occ_status in ("failed", "refunded") else None,
             )
         except Exception as e:
             storage.update_occurrence(occ_id, status="failed", erro=str(e)[:300])

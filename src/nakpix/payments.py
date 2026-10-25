@@ -125,8 +125,13 @@ def pay_pix(
     chave: str,
     cupom: str | None = None,
     network: str = "polygon",
+    on_order_created=None,
 ) -> dict:
-    """Immediate PIX: create order -> fund -> poll. Returns final status."""
+    """Immediate PIX: create order -> fund -> poll. Returns final status.
+
+    ``on_order_created(ordem_id)`` is called right after the order is created
+    and BEFORE any funds move — the scheduler uses it to persist the explicit
+    occurrence→order association for crash-safe recovery."""
     if network != "polygon":
         raise PaymentError(f"rede {network} ainda não habilitada para pagamento imediato")
     if not wallet.exists("polygon"):
@@ -134,6 +139,8 @@ def pay_pix(
 
     ordem = create_order(client, pix_value=pix_value, chave=chave, cupom=cupom,
                          extorno=wallet.address("polygon"), network=network)
+    if on_order_created:
+        on_order_created(ordem["ordem"])
     # pre-flight balance check: don't attempt a transfer that will certainly fail
     from .blockchain.polygon import get_chain
     chain = get_chain()

@@ -60,8 +60,9 @@ CREATE TABLE IF NOT EXISTS occurrences (
     schedule_id INTEGER NOT NULL,
     due_ts INTEGER NOT NULL,
     executed_ts INTEGER,
-    status TEXT DEFAULT 'pending',         -- pending|running|done|failed|investigacao
+    status TEXT DEFAULT 'pending',         -- pending|running|done|failed|refunded|investigacao
     ordem_id TEXT,
+    tx_hash TEXT,
     resgate TEXT,
     erro TEXT
 );
@@ -149,6 +150,9 @@ def _migrate(c: sqlite3.Connection) -> None:
 
     # occurrences: resgate code + an 'investigacao' state for interrupted ops.
     _add_column(c, "occurrences", "resgate", "TEXT")
+    # occurrences: explicit blockchain tx_hash link (association is recorded
+    # BEFORE funds move, so recovery never has to guess a payment by key+value).
+    _add_column(c, "occurrences", "tx_hash", "TEXT")
 
     # incidents: a proper email state machine (pending|sent|instructed|failed)
     # instead of the single email_sent flag.
@@ -243,20 +247,24 @@ def get_payment(ordem_id: str) -> dict | None:
     return dict(r) if r else None
 
 
-def find_payment_for_schedule(*, chave: str, valor_brl: float, network: str,
-                              since_ts: int) -> dict | None:
-    """Best-effort recovery: locate the payment created by a schedule execution
-    (matched by PIX key + BRL amount + network, created at/after ``since_ts``).
-    Used by the scheduler to reconcile an interrupted occurrence WITHOUT
-    re-broadcasting — never to infer a transfer that has no on-chain record."""
-    init()
-    with conn() as c:
-        r = c.execute(
-            "SELECT * FROM payments WHERE chave=? AND pix_brl=? AND network=? "
-            "AND ts >= ? ORDER BY ts DESC LIMIT 1",
-            (chave, valor_brl, network, since_ts),
-        ).fetchone()
-    return dict(r) if r else None
+def link_occurrence_payment(occurrence_id: int, *, ordem_id: str | None = None,
+                            tx_hash: str | None = None) -> None:
+    """Record an explicit, persistent association between an occurrence and the
+    order it spawned (optionally the broadcast tx hash).
+
+    This is the ONLY trusted link between a schedule execution and its money
+    movement. It is written BEFORE funds move (right after the order is
+    created), so an interrupted run can be recovered from the occurrence itself
+    — never by guessing a payment from PIX key + value + network (which can
+    collide with an unrelated manual payment).
+    """
+    fields = {}
+    if ordem_id is not None:
+        fields["ordem_id"] = ordem_id
+    if tx_hash is not None:
+        fields["tx_hash"] = tx_hash
+    if fields:
+        update_occurrence(occurrence_id, **fields)
 
 
 # ── schedules ──────────────────────────────────────────────────────────────
@@ -447,3 +455,20 @@ def mark_incident_notification_delivered(incident_id: int) -> None:
             ids.append(r["id"])
     for nid in ids:
         mark_notification_delivered(nid)
+
+
+def has_pending_incident_notification(incident_id: int) -> bool:
+    """True if an UNDELIVERED incident notification already exists for this
+    incident. Used to guarantee a single in-flight notification per incident so
+    a retry can never queue a duplicate."""
+    init()
+    with conn() as c:
+        rows = c.execute("SELECT payload FROM notifications WHERE delivered=0").fetchall()
+    for r in rows:
+        try:
+            pl = json.loads(r["payload"])
+        except Exception:
+            continue
+        if pl.get("kind") == "incident" and pl.get("incident_id") == incident_id:
+            return True
+    return False

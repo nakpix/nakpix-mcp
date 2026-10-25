@@ -111,7 +111,9 @@ def test_recover_stale_running_with_payment(isolated_home):
     sid = storage.add_schedule(nome="t", chave="a@b.com", valor_brl=10.0, network="polygon",
                                recurrencia="once", proxima_ocorrencia=now - 10000)
     occ_id = storage.add_occurrence(sid, now - 10000)
-    storage.update_occurrence(occ_id, status="running", executed_ts=now - 10000)
+    # the occurrence→order association is recorded BEFORE funds move
+    storage.update_occurrence(occ_id, status="running", executed_ts=now - 10000,
+                              ordem_id="PX_REC")
     # transfer WAS sent: a payment record exists (recover ordem + hash)
     storage.record_payment(ordem_id="PX_REC", pix_brl=10.0, chave="a@b.com",
                            network="polygon", token="USDT", usdt=2.0,
