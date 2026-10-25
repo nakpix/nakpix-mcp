@@ -23,6 +23,8 @@ from .api import BackendClient
 
 INCIDENT_MINUTES = int(os.environ.get("NAKPIX_INCIDENT_MINUTES", "15"))
 _TERMINAL = ("sent", "done", "solucionado", "refunded", "extornado", "resolved")
+INCIDENT_EMAIL_TO = "suporte@nakswap.xyz"
+MAX_EMAIL_ATTEMPTS = 3
 
 
 def _is_unresolved(p: dict) -> bool:
@@ -123,15 +125,16 @@ def scan_once(client: BackendClient | None = None) -> int:
                 continue
             inc = storage.create_incident(dedup_key=ordem or p.get("tx_hash") or str(p.get("id")),
                                           ordem_id=ordem)
-            if inc.get("email_sent") == 0:
+            # Dispatch the incident notification exactly once (and re-dispatch
+            # after a failed attempt, up to MAX_EMAIL_ATTEMPTS). The AGENT sends
+            # the email to suporte@nakswap.xyz — the MCP never sends email.
+            if inc.get("email_state") == "pending" and not inc.get("email_ts"):
                 subject, body = build_incident_email(p, order_status)
-                # Dispatch to the AGENT (it sends the email with its own tool) —
-                # the MCP never uses NAKPIX SMTP. Mark dispatched so it is not
-                # re-enqueued on the next scan.
-                storage.update_incident(inc["id"], email_sent=1,
-                                        email_ts=int(time.time()))
+                storage.update_incident(inc["id"], email_ts=int(time.time()))
                 storage.enqueue_notification("agent", {
                     "kind": "incident",
+                    "incident_id": inc["id"],
+                    "to": INCIDENT_EMAIL_TO,
                     "ordem_id": ordem,
                     "status": order_status.get("status"),
                     "subject": subject,

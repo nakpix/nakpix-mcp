@@ -72,9 +72,9 @@ def test_recover_stale_running(isolated_home):
     recovered = sched.recover_stale_running(now)
     assert recovered == 1
     occ = storage.get_occurrence(occ_id)
-    assert occ["status"] == "pending"     # reconciled (not 'running')
+    assert occ["status"] == "investigacao"   # no payment evidence -> not concluded
     sched_rec = storage.get_schedule(sid)
-    assert sched_rec["status"] == "done"  # one-shot schedule advanced
+    assert sched_rec["status"] == "active"   # schedule NOT advanced (no transfer)
 
 
 def test_run_due_recovers_stale_running_before_processing(isolated_home, monkeypatch):
@@ -101,9 +101,9 @@ def test_run_due_recovers_stale_running_before_processing(isolated_home, monkeyp
     class NoopClient:
         pass
 
-    # run_due must first reconcile the stale 'running' -> 'pending' and NOT
-    # re-execute (the schedule is advanced to 'done', so due_schedules skips it).
+    # run_due must first reconcile the stale 'running' (no evidence -> investigate)
+    # and NOT re-execute / re-broadcast.
     sched.run_due(NoopClient())
     assert calls == []                      # no re-execution / re-broadcast
     occ = storage.get_occurrence(occ_id)
-    assert occ["status"] == "pending"
+    assert occ["status"] == "investigacao"

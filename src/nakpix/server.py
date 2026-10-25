@@ -18,6 +18,7 @@ from . import pix as pix_mod
 from . import quotes as quotes_mod
 from . import storage
 from .api import BackendClient
+from .incidents import MAX_EMAIL_ATTEMPTS
 from .blockchain import solana as solana_chain
 from .blockchain.polygon import get_chain as get_polygon_chain
 from .config import get_setting, set_setting
@@ -95,8 +96,9 @@ def nakpix_import_wallet(network: str) -> dict:
         "status": "blocked",
         "msg": ("por segurança, a importação não aceita o segredo via MCP. "
                 "Rode no terminal:\n"
-                "  nakpix-wallet-agent import " + network + " '<mnemonic-ou-chave-privada>'\n"
-                "e depois consulte nakpix_wallet_status para confirmar."),
+                "  nakpix-wallet-agent import " + network + "\n"
+                "(ele pedirá a seed/chave em entrada oculta) e depois consulte "
+                "nakpix_wallet_status para confirmar."),
     }
 
 
@@ -451,6 +453,50 @@ def nakpix_set_payment_confirmation(enabled: bool) -> dict:
 def nakpix_get_notifications() -> dict:
     """Pending proactive notifications (scheduled results, incidents)."""
     return {"notificacoes": storage.pending_notifications()}
+
+
+@mcp.tool()
+def nakpix_report_incident_email(incident_id: int, outcome: str) -> dict:
+    """Report the outcome of sending an incident alert. `outcome`: 'sent'
+    (accepted by your email tool), 'instructed' (told the user to send), or
+    'failed' (send failed — will be retried). Call ONLY after actually
+    attempting the send, never before."""
+    inc = storage.get_incident(incident_id)
+    if not inc:
+        return _err("incidente não encontrado")
+    now = int(time.time())
+    if outcome == "sent":
+        storage.update_incident(incident_id, email_state="sent", email_ts=now)
+        storage.mark_incident_notification_delivered(incident_id)
+        final = "sent"
+    elif outcome == "instructed":
+        storage.update_incident(incident_id, email_state="instructed", email_ts=now)
+        storage.mark_incident_notification_delivered(incident_id)
+        final = "instructed"
+    elif outcome == "failed":
+        attempts = int(inc.get("email_attempts") or 0) + 1
+        if attempts < MAX_EMAIL_ATTEMPTS:
+            # retry: reset to pending and clear the dispatch marker so the
+            # monitor re-enqueues the notification.
+            storage.update_incident(incident_id, email_state="pending",
+                                    email_attempts=attempts, email_ts=None)
+            final = "pending"
+        else:
+            storage.update_incident(incident_id, email_state="failed",
+                                    email_attempts=attempts, email_ts=now)
+            storage.mark_incident_notification_delivered(incident_id)
+            final = "failed"
+    else:
+        return _err("outcome inválido — use 'sent', 'instructed' ou 'failed'")
+    return {"status": "ok", "incident_id": incident_id, "email_state": final}
+
+
+@mcp.tool()
+def nakpix_ack_notification(notification_id: int) -> dict:
+    """Acknowledge that a notification was fully processed (mark it delivered).
+    Use after handling a non-incident notification (scheduled_result, reminder)."""
+    storage.mark_notification_delivered(notification_id)
+    return {"status": "ok", "notification_id": notification_id}
 
 
 def main() -> None:

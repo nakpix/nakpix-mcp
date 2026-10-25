@@ -60,8 +60,9 @@ CREATE TABLE IF NOT EXISTS occurrences (
     schedule_id INTEGER NOT NULL,
     due_ts INTEGER NOT NULL,
     executed_ts INTEGER,
-    status TEXT DEFAULT 'pending',         -- pending|running|done|failed
+    status TEXT DEFAULT 'pending',         -- pending|running|done|failed|investigacao
     ordem_id TEXT,
+    resgate TEXT,
     erro TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_occ_due ON occurrences(status, due_ts);
@@ -73,6 +74,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     ordem_id TEXT,
     tipo TEXT DEFAULT 'unresolved_pix',
     status TEXT DEFAULT 'open',            -- open|resolved
+    email_state TEXT DEFAULT 'pending',    -- pending|sent|instructed|failed
+    email_attempts INTEGER DEFAULT 0,
     email_sent INTEGER DEFAULT 0,
     email_ts INTEGER,
     resolvido_ts INTEGER
@@ -143,6 +146,14 @@ def _migrate(c: sqlite3.Connection) -> None:
     # schedules: dia_ancora keeps the original day-of-month for monthly
     # recurrence so "day 31" clamps correctly across shorter months.
     _add_column(c, "schedules", "dia_ancora", "INTEGER")
+
+    # occurrences: resgate code + an 'investigacao' state for interrupted ops.
+    _add_column(c, "occurrences", "resgate", "TEXT")
+
+    # incidents: a proper email state machine (pending|sent|instructed|failed)
+    # instead of the single email_sent flag.
+    _add_column(c, "incidents", "email_state", "TEXT DEFAULT 'pending'")
+    _add_column(c, "incidents", "email_attempts", "INTEGER DEFAULT 0")
 
 
 def _now() -> int:
@@ -229,6 +240,22 @@ def get_payment(ordem_id: str) -> dict | None:
     init()
     with conn() as c:
         r = c.execute("SELECT * FROM payments WHERE ordem_id=?", (ordem_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def find_payment_for_schedule(*, chave: str, valor_brl: float, network: str,
+                              since_ts: int) -> dict | None:
+    """Best-effort recovery: locate the payment created by a schedule execution
+    (matched by PIX key + BRL amount + network, created at/after ``since_ts``).
+    Used by the scheduler to reconcile an interrupted occurrence WITHOUT
+    re-broadcasting — never to infer a transfer that has no on-chain record."""
+    init()
+    with conn() as c:
+        r = c.execute(
+            "SELECT * FROM payments WHERE chave=? AND pix_brl=? AND network=? "
+            "AND ts >= ? ORDER BY ts DESC LIMIT 1",
+            (chave, valor_brl, network, since_ts),
+        ).fetchone()
     return dict(r) if r else None
 
 
@@ -341,6 +368,13 @@ def create_incident(*, dedup_key: str, ordem_id: str | None = None,
     return dict(r)
 
 
+def get_incident(incident_id: int) -> dict | None:
+    init()
+    with conn() as c:
+        r = c.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
+    return dict(r) if r else None
+
+
 def get_open_incidents() -> list[dict]:
     init()
     with conn() as c:
@@ -395,3 +429,21 @@ def mark_notification_delivered(notification_id: int) -> None:
     init()
     with conn() as c:
         c.execute("UPDATE notifications SET delivered=1 WHERE id=?", (notification_id,))
+
+
+def mark_incident_notification_delivered(incident_id: int) -> None:
+    """Mark every pending notification for an incident as delivered (called only
+    after the agent has actually sent the email / instructed the user)."""
+    init()
+    with conn() as c:
+        rows = c.execute("SELECT id, payload FROM notifications WHERE delivered=0").fetchall()
+    ids = []
+    for r in rows:
+        try:
+            pl = json.loads(r["payload"])
+        except Exception:
+            continue
+        if pl.get("incident_id") == incident_id:
+            ids.append(r["id"])
+    for nid in ids:
+        mark_notification_delivered(nid)

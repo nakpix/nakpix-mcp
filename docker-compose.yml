@@ -7,14 +7,22 @@
 # (encrypted wallets + schedule/payment DB), so the Docker services act on the
 # SAME wallets and schedules as the agent — not a separate volume.
 #
+# Permissions: the container runs as an unprivileged user. Make sure ~/.nakpix
+# is owned by the uid/gid below (default 1000:1000; override with
+# NAKPIX_UID/NAKPIX_GID to match your host user).
+#
 #   docker compose up -d
 #
 services:
   scheduler:
-    build: .
+    build:
+      context: .
+      args:
+        NAKPIX_UID: ${NAKPIX_UID:-1000}
     image: nakpix-mcp:latest
     command: ["nakpix-scheduler"]
     restart: unless-stopped
+    user: "${NAKPIX_UID:-1000}:${NAKPIX_GID:-1000}"
     env_file: .env
     environment:
       NAKPIX_HOME: /nakpix
@@ -22,10 +30,14 @@ services:
       - ~/.nakpix:/nakpix
 
   incidents:
-    build: .
+    build:
+      context: .
+      args:
+        NAKPIX_UID: ${NAKPIX_UID:-1000}
     image: nakpix-mcp:latest
     command: ["nakpix-incidents"]
     restart: unless-stopped
+    user: "${NAKPIX_UID:-1000}:${NAKPIX_GID:-1000}"
     env_file: .env
     environment:
       NAKPIX_HOME: /nakpix
