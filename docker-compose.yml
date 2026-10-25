@@ -3,6 +3,10 @@
 # long-running services are what keep scheduled payments and the 15-minute
 # incident monitor alive even when no agent conversation is open.
 #
+# The bind mount `~/.nakpix:/nakpix` shares the agent's LOCAL storage
+# (encrypted wallets + schedule/payment DB), so the Docker services act on the
+# SAME wallets and schedules as the agent — not a separate volume.
+#
 #   docker compose up -d
 #
 services:
@@ -15,7 +19,7 @@ services:
     environment:
       NAKPIX_HOME: /nakpix
     volumes:
-      - nakpix-data:/nakpix
+      - ~/.nakpix:/nakpix
 
   incidents:
     build: .
@@ -27,7 +31,4 @@ services:
       NAKPIX_HOME: /nakpix
       NAKPIX_INCIDENT_MINUTES: ${NAKPIX_INCIDENT_MINUTES:-15}
     volumes:
-      - nakpix-data:/nakpix
-
-volumes:
-  nakpix-data:
+      - ~/.nakpix:/nakpix

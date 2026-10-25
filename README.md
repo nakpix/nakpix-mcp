@@ -35,7 +35,7 @@ nakpix-mcp server ──► nakpix-wallet-agent  (LOCAL, keys stay here)
    ├──► backend HTTP  (nakpix.xyz relays — existing processing)
    ├──► blockchain    (balance/deposit read-only)
    ├──► scheduler     (persistent, background process)
-   └──► incidents     (15-min unresolved monitor + email)
+   └──► incidents     (15-min unresolved monitor + agent notification)
 ```
 
 The **wallet-agent** is the only component that touches secret material. The
@@ -54,7 +54,7 @@ pip install -e .
 ## Configure
 
 ```bash
-cp .env.example .env   # fill NAKPIX_BACKEND_URL, SMTP, RPCs
+cp .env.example .env   # fill NAKPIX_BACKEND_URL, RPCs
 ```
 
 Local data lives in `~/.nakpix/` (wallets encrypted with Argon2id + AES-256-GCM,
@@ -73,7 +73,7 @@ payments and the 15-minute incident monitor to work while no chat is open):
 
 ```bash
 nakpix-scheduler    # executes due schedules (idempotent)
-nakpix-incidents    # opens incidents + emails suporte@nakswap.xyz
+nakpix-incidents    # opens incidents + enqueues notification for the agent to email
 ```
 
 Or with Docker:

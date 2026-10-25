@@ -11,7 +11,9 @@ All notable changes to the NAKPIX MCP server.
   Polygon (EVM) and Solana wallets, encrypted with Argon2id + AES-256-GCM.
 - On-chain balance/deposit queries (Polygon + Solana, read-only).
 - Persistent scheduler + worker for one-shot and recurring PIX (idempotent).
-- 15-minute unresolved-payment incident monitor with dedup + SMTP email.
+- 15-minute unresolved-payment incident monitor with dedup (enqueues an
+  agent notification; the agent sends the alert email via its own tool —
+  the MCP never uses SMTP).
 - Persistent notification queue for offline agent delivery.
 - Docker + docker-compose deployment for background services.
 - Test suite (pytest) covering wallet security, validation, storage, scheduler,

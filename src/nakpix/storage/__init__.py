@@ -160,6 +160,8 @@ def record_payment(*, ordem_id: str | None = None, pix_brl: float, network: str,
 
     - ``ts`` is the immutable FINANCIAL anchor (first write = funds sent) used
       by the 15-min monitor; it is never overwritten by later updates.
+    - ``pix_brl`` is also immutable (the BRL amount of an order never changes);
+      a later update passing 0 does NOT overwrite the real value.
     - ``updated_at`` tracks the last write.
     - Optional fields merge with COALESCE so a partial update never wipes
       already-stored values (chave, valor BRL, cupom, resgate). ``status`` is
@@ -174,7 +176,6 @@ def record_payment(*, ordem_id: str | None = None, pix_brl: float, network: str,
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(ordem_id) DO UPDATE SET "
                 "updated_at=excluded.updated_at, "
-                "pix_brl=COALESCE(excluded.pix_brl, payments.pix_brl), "
                 "chave=COALESCE(excluded.chave, payments.chave), "
                 "network=COALESCE(excluded.network, payments.network), "
                 "token=COALESCE(excluded.token, payments.token), "

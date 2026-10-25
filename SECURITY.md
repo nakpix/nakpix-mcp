@@ -34,11 +34,13 @@ already enforces its own validation, rate limiting and reconciliation.
 - The incident monitor **never** re-sends funds and never marks an unknown
   result as a definitive failure; it never claims a refund without confirmation.
 
-## Incident email
+## Incident notification
 
-Incident emails contain operational data only (order id, tx hash, amounts,
-status) and explicitly exclude: seed phrases, recovery words, private keys,
-passwords, API tokens, signing secrets, DB credentials.
+The monitor enqueues an `incident` notification (subject + body) that the agent
+sends via its own email tool — the MCP never sends email over SMTP. The content
+is operational data only (order id, tx hash, amounts, status) and explicitly
+excludes: seed phrases, recovery words, private keys, passwords, API tokens,
+signing secrets, DB credentials.
 
 ## Reporting
 

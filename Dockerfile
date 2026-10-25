@@ -13,8 +13,8 @@ COPY src/ ./src/
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e .
 
-RUN useradd -m -u 1000 nakpix && mkdir -p /nakpix && chown -R nakpix:nakpix /nakpix
-USER nakpix
+# Run as root so the container can read/write the bind-mounted ~/.nakpix
+# (the agent's local wallet + schedule DB) regardless of host ownership.
 
 # Default: the MCP server (stdio). Compose overrides `command` for
 # scheduler/incidents (a CMD is overridable; an ENTRYPOINT is not).

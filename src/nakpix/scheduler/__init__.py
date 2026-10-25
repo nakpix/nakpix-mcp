@@ -77,7 +77,52 @@ def execute_schedule(schedule: dict, client: BackendClient) -> dict:
         cupom=schedule.get("cupom"),
         network=schedule.get("network") or "polygon",
     )
-    return {"status": result.get("status"), "ordem": result.get("ordem")}
+    return {"status": result.get("status"), "ordem": result.get("ordem"),
+            "erro": result.get("erro") or result.get("msg")}
+
+
+_DONE_STATUS = ("sent", "done", "solucionado", "refunded", "extornado", "resolved")
+_FAILED_STATUS = ("erro", "err", "failed", "notfound")
+
+
+def _occurrence_status(result_status: str | None) -> str:
+    """Map a pay_pix result status to an occurrence status.
+
+    A 'pending' PIX (funds sent, still processing) must NOT be recorded as
+    'done' — it is tracked to completion by the incident monitor.
+    """
+    if result_status in _DONE_STATUS:
+        return "done"
+    if result_status in _FAILED_STATUS:
+        return "failed"
+    return "pending"
+
+
+def recover_stale_running(now: int | None = None) -> int:
+    """Reconcile occurrences left ``running`` by a crashed previous run.
+
+    The scheduler is single-process, so any ``running`` occurrence at startup
+    is stale (its owning process is gone). Mark it ``pending`` (needs follow-up
+    via the incident monitor) and advance its schedule — WITHOUT re-broadcasting
+    the blockchain transfer.
+    """
+    storage.init()
+    now = now or int(time.time())
+    recovered = 0
+    with storage.conn() as c:
+        rows = c.execute("SELECT * FROM occurrences WHERE status='running'").fetchall()
+    for r in rows:
+        storage.update_occurrence(r["id"], status="pending")
+        s = storage.get_schedule(r["schedule_id"])
+        if s and s.get("status") == "active":
+            nxt = next_occurrence(s, r["due_ts"])
+            reps = int(s.get("reps_executadas") or 0) + 1
+            if nxt is None:
+                storage.update_schedule(s["id"], status="done", reps_executadas=reps)
+            else:
+                storage.update_schedule(s["id"], proxima_ocorrencia=nxt, reps_executadas=reps)
+        recovered += 1
+    return recovered
 
 
 def run_due(client: BackendClient | None = None) -> int:
@@ -85,6 +130,7 @@ def run_due(client: BackendClient | None = None) -> int:
     storage.init()
     client = client or BackendClient()
     now = int(time.time())
+    recover_stale_running(now)
     executed = 0
     for s in storage.due_schedules(now):
         sched_id = s["id"]
@@ -106,8 +152,10 @@ def run_due(client: BackendClient | None = None) -> int:
         res: dict = {"status": "failed"}
         try:
             res = execute_schedule(s, client)
-            storage.update_occurrence(occ_id, status="done", ordem_id=res.get("ordem"),
-                                      erro=None)
+            occ_status = _occurrence_status(res.get("status"))
+            storage.update_occurrence(occ_id, status=occ_status,
+                                      ordem_id=res.get("ordem"),
+                                      erro=res.get("erro") if occ_status == "failed" else None)
         except Exception as e:
             storage.update_occurrence(occ_id, status="failed", erro=str(e)[:300])
             res = {"status": "failed", "erro": str(e)[:300]}

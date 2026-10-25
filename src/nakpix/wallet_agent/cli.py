@@ -41,9 +41,9 @@ def cmd_create(args) -> int:
 
 
 def cmd_import(args) -> int:
-    secret = getattr(args, "secret", None)
-    if not secret:
-        secret = getpass.getpass("Mnemonic ou chave privada (entrada oculta, não fica no histórico): ")
+    # Secret is ALWAYS read via hidden prompt — never as a CLI argument, so it
+    # never lands in the shell history or process list.
+    secret = getpass.getpass("Mnemonic ou chave privada (entrada oculta, não fica no histórico): ")
     info = manager.import_secret(args.network, secret.strip(), _passphrase(args))
     print(f"Carteira {info['network']} importada: {info['address']}")
     return 0
@@ -105,7 +105,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("import", help="importa carteira (mnemonic ou private key)")
     i.add_argument("network", choices=["polygon", "solana"])
-    i.add_argument("secret", nargs="?", help="opcional — omita para digitar de forma oculta")
     i.add_argument("--passphrase")
     i.set_defaults(fn=cmd_import)
 

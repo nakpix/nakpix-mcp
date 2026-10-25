@@ -29,7 +29,7 @@ def isolated_home(tmp_path, monkeypatch):
 
     for mod in ("nakpix.config", "nakpix.storage", "nakpix.wallet_agent.manager",
                 "nakpix.contacts", "nakpix.coupons", "nakpix.api", "nakpix.pix",
-                "nakpix.quotes", "nakpix.email", "nakpix.payments",
+                "nakpix.quotes", "nakpix.payments",
                 "nakpix.scheduler", "nakpix.incidents", "nakpix.server"):
         if mod in sys.modules:
             importlib.reload(sys.modules[mod])

@@ -120,13 +120,14 @@ def test_list_unresolved_payments_pagination(isolated_home):
 
 
 # ── 6. CLI import: secret optional (interactive/hidden) ───────────────────
-def test_cli_import_secret_optional():
+def test_cli_import_no_secret_argument():
     from nakpix.wallet_agent import cli
 
     args = cli.build_parser().parse_args(["import", "polygon"])
-    assert args.secret is None
-    args2 = cli.build_parser().parse_args(["import", "polygon", "abc def ghi"])
-    assert args2.secret == "abc def ghi"
+    assert not hasattr(args, "secret")  # secret is NOT a CLI arg anymore
+    # a secret passed as an extra positional must be rejected
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["import", "polygon", "abc def ghi"])
 
 
 # ── 7. incident email carries deposit / expira / resgate ──────────────────

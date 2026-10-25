@@ -5,8 +5,9 @@ and no refund is confirmed, for longer than ``NAKPIX_INCIDENT_MINUTES``.
 
 On detection (deduplicated by order id):
   1. create/open an incident
-  2. email suporte@nakswap.xyz with all operational data (no secrets)
-  3. enqueue a user notification (delivered by the agent when it reconnects)
+  2. enqueue a notification with the FULL operational data (subject + body)
+     so the AGENT can send the email with its own email tool — the MCP never
+     uses NAKPIX SMTP.
 
 The monitor NEVER re-sends the transfer, never marks an unknown result as a
 definitive failure, and never claims a refund happened without confirmation.
@@ -17,7 +18,6 @@ from __future__ import annotations
 import os
 import time
 
-from . import email as email_mod
 from . import storage
 from .api import BackendClient
 
@@ -125,14 +125,17 @@ def scan_once(client: BackendClient | None = None) -> int:
                                           ordem_id=ordem)
             if inc.get("email_sent") == 0:
                 subject, body = build_incident_email(p, order_status)
-                ok = email_mod.send_email(subject, body)
-                storage.update_incident(inc["id"], email_sent=1 if ok else 0,
-                                        email_ts=int(time.time()) if ok else 0)
+                # Dispatch to the AGENT (it sends the email with its own tool) —
+                # the MCP never uses NAKPIX SMTP. Mark dispatched so it is not
+                # re-enqueued on the next scan.
+                storage.update_incident(inc["id"], email_sent=1,
+                                        email_ts=int(time.time()))
                 storage.enqueue_notification("agent", {
                     "kind": "incident",
                     "ordem_id": ordem,
                     "status": order_status.get("status"),
-                    "email_sent": ok,
+                    "subject": subject,
+                    "body": body,
                     "ts": int(time.time()),
                 })
                 created += 1
