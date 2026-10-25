@@ -28,7 +28,8 @@ class BackendClient:
         self._client = httpx.Client(timeout=timeout, follow_redirects=False)
 
     def url(self, path: str, network: str | None = None) -> str:
-        base = backend_url_for(network) if network else self.base_url
+        # explicit base_url wins; otherwise resolve from env (per-network or default)
+        base = self.base_url or backend_url_for(network)
         return f"{base}{path}"
 
     def _get(self, path: str, network: str | None = None, **params):

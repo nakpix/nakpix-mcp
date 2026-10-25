@@ -128,7 +128,7 @@ def backend_url() -> str:
     return os.environ.get("NAKPIX_BACKEND_URL", "").rstrip("/")
 
 
-def backend_url_for(network: str) -> str:
+def backend_url_for(network: str | None = None) -> str:
     key = {"polygon": "NAKPIX_BACKEND_POLYGON", "solana": "NAKPIX_BACKEND_SOLANA"}.get(network)
     if key:
         v = os.environ.get(key, "").rstrip("/")
