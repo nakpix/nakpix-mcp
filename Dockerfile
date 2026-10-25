@@ -16,5 +16,6 @@ RUN pip install --no-cache-dir -e .
 RUN useradd -m -u 1000 nakpix && mkdir -p /nakpix && chown -R nakpix:nakpix /nakpix
 USER nakpix
 
-# Default: the MCP server (stdio). Override the command for scheduler/incidents.
-ENTRYPOINT ["nakpix-mcp"]
+# Default: the MCP server (stdio). Compose overrides `command` for
+# scheduler/incidents (a CMD is overridable; an ENTRYPOINT is not).
+CMD ["nakpix-mcp"]

@@ -26,9 +26,9 @@ def next_occurrence(schedule: dict, from_ts: int) -> int | None:
     elif rec == "weekly":
         nxt = dt + datetime.timedelta(days=7)
     elif rec == "monthly":
-        nxt = _add_months(dt, 1)
+        nxt = _add_months(dt, 1, schedule.get("dia_ancora"))
     elif rec == "yearly":
-        nxt = _add_months(dt, 12)
+        nxt = _add_months(dt, 12, schedule.get("dia_ancora"))
     elif rec == "interval":
         nxt = dt + datetime.timedelta(days=int(schedule.get("intervalo_dias") or 1))
     else:
@@ -42,11 +42,13 @@ def next_occurrence(schedule: dict, from_ts: int) -> int | None:
     return int(nxt.timestamp())
 
 
-def _add_months(dt: datetime.datetime, months: int) -> datetime.datetime:
+def _add_months(dt: datetime.datetime, months: int, anchor_day: int | None = None) -> datetime.datetime:
     m = dt.month - 1 + months
     year = dt.year + m // 12
     month = m % 12 + 1
-    day = min(dt.day, _days_in_month(year, month))
+    # anchor_day keeps the ORIGINAL day-of-month (e.g. 31) across shorter
+    # months, so Jan-31 -> Feb-28 -> Mar-31 (not stuck at 28 forever).
+    day = min(anchor_day or dt.day, _days_in_month(year, month))
     return dt.replace(year=year, month=month, day=day)
 
 

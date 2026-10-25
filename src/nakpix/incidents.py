@@ -70,6 +70,11 @@ def build_incident_email(p: dict, order_status: dict) -> tuple[str, str]:
         f"  Token: {p.get('token') or 'USDT'}",
         f"  Valor enviado: {p.get('usdt')}",
         f"  Hash da transação: {p.get('tx_hash') or '—'}",
+        f"  Endereço de depósito: {order_status.get('deposit') or '—'}",
+        f"  Expira em: {_ts(order_status.get('expira'))}",
+        "",
+        "[Resgate]",
+        f"  Código de resgate: {order_status.get('resgate') or p.get('resgate') or '—'}",
         "",
         "[Cotação e taxas]",
         f"  Fee %: {p.get('fee_pct')}",
@@ -95,37 +100,43 @@ def scan_once(client: BackendClient | None = None) -> int:
     client = client or BackendClient()
     created = 0
     cutoff = int(time.time() - INCIDENT_MINUTES * 60)
-    # Scan ALL unresolved ops older than the threshold (not just the 500 most
-    # recent), oldest first — so no unresolved payment is ever missed.
-    for p in storage.list_unresolved_payments(cutoff):
-        if not _is_unresolved(p):
-            continue
-        ordem = p.get("ordem_id")
-        order_status: dict = {}
-        if ordem:
-            try:
-                order_status = client.order_status(ordem, p.get("network"))
-            except Exception as e:
-                order_status = {"status": "erro", "erro": str(e)[:120]}
-        # if the backend says it resolved, close any open incident
-        if order_status.get("status") in _TERMINAL:
-            _close_by_ordem(ordem)
-            continue
-        inc = storage.create_incident(dedup_key=ordem or p.get("tx_hash") or str(p.get("id")),
-                                      ordem_id=ordem)
-        if inc.get("email_sent") == 0:
-            subject, body = build_incident_email(p, order_status)
-            ok = email_mod.send_email(subject, body)
-            storage.update_incident(inc["id"], email_sent=1 if ok else 0,
-                                    email_ts=int(time.time()) if ok else 0)
-            storage.enqueue_notification("agent", {
-                "kind": "incident",
-                "ordem_id": ordem,
-                "status": order_status.get("status"),
-                "email_sent": ok,
-                "ts": int(time.time()),
-            })
-            created += 1
+    # Page through ALL unresolved ops older than the threshold (oldest first),
+    # with no hard cap — so no unresolved payment is ever missed.
+    offset = 0
+    while True:
+        page = storage.list_unresolved_payments(cutoff, limit=500, offset=offset)
+        if not page:
+            break
+        for p in page:
+            if not _is_unresolved(p):
+                continue
+            ordem = p.get("ordem_id")
+            order_status: dict = {}
+            if ordem:
+                try:
+                    order_status = client.order_status(ordem, p.get("network"))
+                except Exception as e:
+                    order_status = {"status": "erro", "erro": str(e)[:120]}
+            # if the backend says it resolved, close any open incident
+            if order_status.get("status") in _TERMINAL:
+                _close_by_ordem(ordem)
+                continue
+            inc = storage.create_incident(dedup_key=ordem or p.get("tx_hash") or str(p.get("id")),
+                                          ordem_id=ordem)
+            if inc.get("email_sent") == 0:
+                subject, body = build_incident_email(p, order_status)
+                ok = email_mod.send_email(subject, body)
+                storage.update_incident(inc["id"], email_sent=1 if ok else 0,
+                                        email_ts=int(time.time()) if ok else 0)
+                storage.enqueue_notification("agent", {
+                    "kind": "incident",
+                    "ordem_id": ordem,
+                    "status": order_status.get("status"),
+                    "email_sent": ok,
+                    "ts": int(time.time()),
+                })
+                created += 1
+        offset += len(page)
     return created
 
 

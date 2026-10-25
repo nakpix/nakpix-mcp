@@ -19,6 +19,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL,
+    updated_at INTEGER,
     ordem_id TEXT UNIQUE,
     pix_brl REAL NOT NULL,
     chave TEXT,
@@ -49,7 +50,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     max_reps INTEGER,
     reps_executadas INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',          -- active|paused|cancelled|done
-    reminder_only INTEGER DEFAULT 0
+    reminder_only INTEGER DEFAULT 0,
+    dia_ancora INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(status, proxima_ocorrencia);
 
@@ -104,20 +106,43 @@ def init() -> None:
         _migrate(c)
 
 
+def _add_column(c: sqlite3.Connection, table: str, column: str, type_: str) -> None:
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {type_}")
+
+
 def _migrate(c: sqlite3.Connection) -> None:
-    """Idempotent migrations for databases created before a constraint was
-    added. Safe to run on every init()."""
-    # occurrences: enforce one row per (schedule_id, due_ts) so a schedule can
-    # never be executed twice for the same due time. Dedupe first (keep the
-    # earliest), then create the unique index (also covers fresh databases).
+    """Idempotent, NON-DESTRUCTIVE migrations. Safe to run on every init().
+
+    Never DELETEs financial records. Done/failed occurrences (and their
+    ordem_id/tx) are always preserved.
+    """
+    # occurrences: drop the legacy FULL unique index (from an earlier build
+    # that also deleted duplicates) and replace it with a PARTIAL one that only
+    # blocks two ACTIVE (pending/running) rows for the same (schedule_id,
+    # due_ts). Historical done/failed rows are untouched.
+    c.execute("DROP INDEX IF EXISTS idx_occ_unique")
+    # Legacy duplicate ACTIVE rows carry no financial id (ordem_id is set only
+    # on 'done'); demote the later ones to 'failed' (preserved, no longer
+    # active) so the partial index can be created.
     c.execute(
-        "DELETE FROM occurrences WHERE id NOT IN "
-        "(SELECT MIN(id) FROM occurrences GROUP BY schedule_id, due_ts)"
+        "UPDATE occurrences SET status='failed' "
+        "WHERE status IN ('pending','running') AND id NOT IN ("
+        "  SELECT MIN(id) FROM occurrences WHERE status IN ('pending','running') "
+        "  GROUP BY schedule_id, due_ts)"
     )
     c.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_unique "
-        "ON occurrences(schedule_id, due_ts)"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_active "
+        "ON occurrences(schedule_id, due_ts) WHERE status IN ('pending','running')"
     )
+
+    # payments: updated_at (last write) alongside the immutable ts anchor.
+    _add_column(c, "payments", "updated_at", "INTEGER")
+
+    # schedules: dia_ancora keeps the original day-of-month for monthly
+    # recurrence so "day 31" clamps correctly across shorter months.
+    _add_column(c, "schedules", "dia_ancora", "INTEGER")
 
 
 def _now() -> int:
@@ -133,20 +158,22 @@ def record_payment(*, ordem_id: str | None = None, pix_brl: float, network: str,
                    erro: str | None = None) -> int:
     """Upsert a payment row keyed by ``ordem_id``.
 
-    Optional fields are merged with COALESCE so a later partial update (e.g.
-    recording the tx hash right after broadcast, before the final status is
-    known) never wipes already-stored values (chave, valor BRL, cupom, resgate).
-    ``status`` is always set to the latest value passed.
+    - ``ts`` is the immutable FINANCIAL anchor (first write = funds sent) used
+      by the 15-min monitor; it is never overwritten by later updates.
+    - ``updated_at`` tracks the last write.
+    - Optional fields merge with COALESCE so a partial update never wipes
+      already-stored values (chave, valor BRL, cupom, resgate). ``status`` is
+      always set to the latest value passed.
     """
     init()
     with conn() as c:
         if ordem_id:
             c.execute(
-                "INSERT INTO payments (ts, ordem_id, pix_brl, chave, network, token, "
-                "usdt, fee_pct, cupom, status, tx_hash, resgate, erro) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "INSERT INTO payments (ts, updated_at, ordem_id, pix_brl, chave, network, "
+                "token, usdt, fee_pct, cupom, status, tx_hash, resgate, erro) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(ordem_id) DO UPDATE SET "
-                "ts=excluded.ts, "
+                "updated_at=excluded.updated_at, "
                 "pix_brl=COALESCE(excluded.pix_brl, payments.pix_brl), "
                 "chave=COALESCE(excluded.chave, payments.chave), "
                 "network=COALESCE(excluded.network, payments.network), "
@@ -158,16 +185,17 @@ def record_payment(*, ordem_id: str | None = None, pix_brl: float, network: str,
                 "tx_hash=COALESCE(excluded.tx_hash, payments.tx_hash), "
                 "resgate=COALESCE(excluded.resgate, payments.resgate), "
                 "erro=COALESCE(excluded.erro, payments.erro)",
-                (_now(), ordem_id, pix_brl, chave, network, token, usdt, fee_pct, cupom,
-                 status, tx_hash, resgate, erro),
+                (_now(), _now(), ordem_id, pix_brl, chave, network, token, usdt, fee_pct,
+                 cupom, status, tx_hash, resgate, erro),
             )
             row = c.execute("SELECT id FROM payments WHERE ordem_id=?",
                             (ordem_id,)).fetchone()
             return row["id"] if row else 0
         cur = c.execute(
-            "INSERT INTO payments (ts, pix_brl, chave, network, token, usdt, fee_pct, "
-            "cupom, status, tx_hash, resgate, erro) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (_now(), pix_brl, chave, network, token, usdt, fee_pct, cupom,
+            "INSERT INTO payments (ts, updated_at, pix_brl, chave, network, token, usdt, "
+            "fee_pct, cupom, status, tx_hash, resgate, erro) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (_now(), _now(), pix_brl, chave, network, token, usdt, fee_pct, cupom,
              status, tx_hash, resgate, erro),
         )
         return cur.lastrowid
@@ -180,18 +208,18 @@ def list_payments(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def list_unresolved_payments(cutoff: int, limit: int = 2000) -> list[dict]:
+def list_unresolved_payments(cutoff: int, limit: int = 500, offset: int = 0) -> list[dict]:
     """Payments with an on-chain tx_hash but no terminal status, older than
-    ``cutoff`` (oldest first). Used by the 15-min incident monitor so it never
-    misses an unresolved operation beyond a small recent window."""
+    ``cutoff`` (oldest first). The incident monitor pages through ALL matches
+    via ``offset`` so no unresolved operation is ever missed by a cap."""
     init()
     with conn() as c:
         rows = c.execute(
             "SELECT * FROM payments "
             "WHERE tx_hash IS NOT NULL AND tx_hash != '' "
             "AND status NOT IN ('sent','done','solucionado','refunded','extornado','resolved') "
-            "AND ts <= ? ORDER BY ts ASC LIMIT ?",
-            (cutoff, limit),
+            "AND ts <= ? ORDER BY ts ASC LIMIT ? OFFSET ?",
+            (cutoff, limit, offset),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -210,14 +238,15 @@ def add_schedule(*, nome: str, chave: str, valor_brl: float, network: str,
                  data_fim: int | None = None, max_reps: int | None = None,
                  reminder_only: int = 0) -> int:
     init()
+    dia_ancora = time.localtime(proxima_ocorrencia).tm_mday
     with conn() as c:
         cur = c.execute(
             "INSERT INTO schedules (ts_created, nome, chave, valor_brl, network, cupom, "
             "recurrencia, intervalo_dias, proxima_ocorrencia, data_fim, max_reps, "
-            "reps_executadas, status, reminder_only) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,0,'active',?)",
+            "reps_executadas, status, reminder_only, dia_ancora) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,0,'active',?,?)",
             (_now(), nome, chave, valor_brl, network, cupom, recurrencia, intervalo_dias,
-             proxima_ocorrencia, data_fim, max_reps, reminder_only),
+             proxima_ocorrencia, data_fim, max_reps, reminder_only, dia_ancora),
         )
         return cur.lastrowid
 

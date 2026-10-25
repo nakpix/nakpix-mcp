@@ -21,12 +21,18 @@ def isolated_home(tmp_path, monkeypatch):
     from nakpix import blockchain
 
     blockchain.polygon._chain = None
-    # re-import config to pick up new NAKPIX_HOME (path is computed at import)
+    # re-import config to pick up new NAKPIX_HOME (path is computed at import).
+    # Reload the whole client chain so every module re-binds the isolated
+    # config/storage (server.get_setting, payments.storage, etc.) — otherwise
+    # a module imported earlier keeps pointing at the real ~/.nakpix.
     import importlib
 
     for mod in ("nakpix.config", "nakpix.storage", "nakpix.wallet_agent.manager",
-                "nakpix.contacts", "nakpix.coupons"):
-        importlib.reload(sys.modules[mod])
+                "nakpix.contacts", "nakpix.coupons", "nakpix.api", "nakpix.pix",
+                "nakpix.quotes", "nakpix.email", "nakpix.payments",
+                "nakpix.scheduler", "nakpix.incidents", "nakpix.server"):
+        if mod in sys.modules:
+            importlib.reload(sys.modules[mod])
     yield tmp_path
 
 
