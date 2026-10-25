@@ -92,6 +92,18 @@ _DONE_STATUS = ("sent", "done", "solucionado", "resolved")
 _REFUNDED_STATUS = ("refunded", "extornado")
 _FAILED_STATUS = ("erro", "err", "failed", "notfound")
 
+# Backend order statuses that prove the funds moved (or are moving) — a deposit
+# arrived or the PIX is in flight. Used to reconcile a crash whose broadcast was
+# accepted but never recorded locally.
+_MOVED_STATUS = ("funding", "sent", "done", "solucionado", "resolved",
+                 "refunded", "extornado", "pending", "processing")
+
+# Backend order statuses that PROVE no transfer happened (order never funded /
+# expired / cancelled / unknown to the backend). Distinct from the mere ABSENCE
+# of a local record: these are definitive "no money moved" answers.
+_NO_FUNDS_STATUS = ("expirada", "dead", "inexistente", "notfound",
+                    "cancelada", "cancelado", "cancelled")
+
 
 def _occurrence_status(result_status: str | None) -> str:
     """Map a pay_pix result status to an occurrence status.
@@ -142,9 +154,12 @@ def recover_stale_running(now: int | None = None, client: BackendClient | None =
       schedule (the incident monitor keeps tracking it if still pending);
     - ``ordem_id`` present + payment record without ``tx_hash`` → funding never
       broadcast (e.g. insufficient balance): mark failed and advance;
-    - ``ordem_id`` present + no local payment → the transmission happened but
-      the result was never recorded: ask the backend for the real order status
-      and reconcile from it (or mark failed when no deposit ever arrived).
+    - ``ordem_id`` present + no local payment → the transfer may or may not
+      have happened: ask the backend by the explicit order id. If it confirms
+      funds moved → reconcile + advance; if it PROVES no transfer
+      (expirada/notfound/cancelled) → failed + advance; if it is unreachable or
+      inconclusive → keep ``investigacao``, do NOT advance and do NOT conclude
+      (absence of a local record is not proof of no transfer).
     """
     storage.init()
     now = now or int(time.time())
@@ -185,50 +200,81 @@ def recover_stale_running(now: int | None = None, client: BackendClient | None =
             )
             _advance_schedule(s, r["due_ts"])
         else:
-            # Transmission happened but the result was never recorded: consult
-            # the backend by the EXPLICIT order id (never by key+value).
-            bstatus = None
-            resgate = None
-            erro = None
-            if client is not None:
-                try:
-                    st = client.order_status(ordem_id, s.get("network") if s else None)
-                    bstatus = st.get("status")
-                    resgate = st.get("resgate")
-                    erro = st.get("erro") or st.get("msg")
-                except Exception as e:
-                    erro = str(e)[:120]
-            if bstatus in ("funding", "sent", "done", "solucionado", "resolved",
-                           "refunded", "extornado", "pending", "processing"):
+            # Order created but no LOCAL payment record (no tx_hash). The
+            # transfer may or may not have happened — ask the backend by the
+            # EXPLICIT order id (never by key+value). Three distinct outcomes:
+            #   (a) backend confirms funds moved → reconcile + advance;
+            #   (b) backend PROVES no transfer (expired/cancelled/notfound) →
+            #       failed + advance;
+            #   (c) backend unreachable / no conclusive answer → UNKNOWN: keep
+            #       the occurrence in 'investigacao', do NOT advance and do NOT
+            #       mark failed (absence of a local record is not proof of no
+            #       transfer).
+            if client is None:
+                storage.update_occurrence(
+                    r["id"], status="investigacao",
+                    erro="recuperação: sem registro local e sem cliente backend — resultado desconhecido",
+                )
+                recovered += 1
+                continue
+            try:
+                st = client.order_status(ordem_id, s.get("network") if s else None)
+            except Exception as e:
+                # backend down/timeout: financial result is UNKNOWN.
+                storage.update_occurrence(
+                    r["id"], status="investigacao",
+                    erro=f"recuperação: backend indisponível ({str(e)[:80]}) — resultado desconhecido",
+                )
+                recovered += 1
+                continue
+            bstatus = st.get("status")
+            if bstatus in _MOVED_STATUS:
                 occ_status = _occurrence_status(bstatus)
                 storage.update_occurrence(
                     r["id"], status=occ_status, ordem_id=ordem_id,
-                    resgate=resgate,
-                    erro=erro if occ_status == "failed" else None,
+                    resgate=st.get("resgate"),
+                    erro=(st.get("erro") or st.get("msg")) if occ_status == "failed" else None,
+                )
+                _advance_schedule(s, r["due_ts"])
+            elif bstatus in _NO_FUNDS_STATUS:
+                # PROVEN no transfer (order expired/never funded/cancelled/
+                # unknown to the backend). Safe to conclude: nothing to recover.
+                storage.update_occurrence(
+                    r["id"], status="failed", ordem_id=ordem_id,
+                    erro=f"ordem {bstatus} sem depósito — transferência não ocorreu",
                 )
                 _advance_schedule(s, r["due_ts"])
             else:
+                # unrecognized/empty status → no conclusive answer.
                 storage.update_occurrence(
-                    r["id"], status="failed", ordem_id=ordem_id,
-                    erro="ordem criada sem depósito confirmado (sem transferência)",
+                    r["id"], status="investigacao",
+                    erro=f"recuperação: status backend não conclusivo ({bstatus!r}) — aguardando confirmação",
                 )
-                _advance_schedule(s, r["due_ts"])
         recovered += 1
     return recovered
 
 
 def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
-    """Update ``pending`` occurrences (funds sent, PIX not yet confirmed) once
-    the backend reaches a definitive result — done/failed with resgate/receipt —
-    and notify the agent of the resolution."""
+    """Close ``pending`` / ``investigacao`` occurrences (funds sent or unknown
+    result, PIX not yet confirmed) once the backend reaches a definitive result
+    — done/refunded/failed with resgate/receipt — and notify the agent.
+
+    Also re-checks ``investigacao`` occurrences (whose schedule was deliberately
+    NOT advanced during recovery) so the original order is resolved and the
+    schedule advances as soon as the backend becomes reachable / conclusive
+    again. A definitive answer never re-sends funds; an unreachable backend is
+    retried on the next cycle.
+    """
     storage.init()
     client = client or BackendClient()
     reconciled = 0
     with storage.conn() as c:
         rows = c.execute(
-            "SELECT * FROM occurrences WHERE status='pending' AND ordem_id IS NOT NULL"
+            "SELECT * FROM occurrences "
+            "WHERE status IN ('pending','investigacao') AND ordem_id IS NOT NULL"
         ).fetchall()
     for r in rows:
+        was_investigacao = r["status"] == "investigacao"
         try:
             st = client.order_status(r["ordem_id"], None)
         except Exception:
@@ -242,6 +288,8 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
                 "ordem_id": r["ordem_id"], "status": bstatus,
                 "resgate": st.get("resgate"), "ts": int(time.time()),
             })
+            if was_investigacao:
+                _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
         elif bstatus in _REFUNDED_STATUS:
             # A confirmed refund is NOT a successful PIX. Record it as its own
@@ -253,15 +301,21 @@ def reconcile_pending_occurrences(client: BackendClient | None = None) -> int:
                 "ordem_id": r["ordem_id"], "status": "refunded",
                 "resgate": st.get("resgate"), "ts": int(time.time()),
             })
+            if was_investigacao:
+                _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
-        elif bstatus in _FAILED_STATUS:
-            storage.update_occurrence(r["id"], status="failed",
-                                      erro=st.get("erro") or st.get("msg"))
+        elif bstatus in _FAILED_STATUS or bstatus in _NO_FUNDS_STATUS:
+            erro = st.get("erro") or st.get("msg")
+            if bstatus in _NO_FUNDS_STATUS and not erro:
+                erro = f"ordem {bstatus} sem depósito — transferência não ocorreu"
+            storage.update_occurrence(r["id"], status="failed", erro=erro)
             storage.enqueue_notification("agent", {
                 "kind": "scheduled_resolved", "schedule_id": r["schedule_id"],
                 "ordem_id": r["ordem_id"], "status": "failed",
-                "erro": st.get("erro") or st.get("msg"), "ts": int(time.time()),
+                "erro": erro, "ts": int(time.time()),
             })
+            if was_investigacao:
+                _advance_schedule(storage.get_schedule(r["schedule_id"]), r["due_ts"])
             reconciled += 1
     return reconciled
 
