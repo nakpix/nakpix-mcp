@@ -71,7 +71,8 @@ def _usdt_transfer_data(to_address: str, amount_usdt: float) -> str:
     )
 
 
-def fund_order_polygon(*, deposit: str, usdt: float, ordem: str) -> str:
+def fund_order_polygon(*, deposit: str, usdt: float, ordem: str, pix_brl: float,
+                       chave: str) -> str:
     """Sign + broadcast the USDT transfer to the deposit address. Returns tx hash."""
     from web3 import Web3
 
@@ -95,7 +96,7 @@ def fund_order_polygon(*, deposit: str, usdt: float, ordem: str) -> str:
     raw = wallet.sign_transaction("polygon", tx)
     tx_hash = w3.eth.send_raw_transaction(raw)
     h = tx_hash.hex()
-    storage.record_payment(ordem_id=ordem, pix_brl=0.0, network="polygon",
+    storage.record_payment(ordem_id=ordem, pix_brl=pix_brl, chave=chave, network="polygon",
                            token="USDT", usdt=usdt, tx_hash=h, status="funding")
     return h
 
@@ -140,28 +141,29 @@ def pay_pix(
     bal_usdt = chain.get_usdt_balance(addr)
     bal_native = chain.get_native_balance(addr)
     if bal_usdt < float(ordem["usdt"]):
-        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, network=network,
-                               token="USDT", usdt=ordem["usdt"], status="failed",
+        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, chave=chave,
+                               network=network, token="USDT", usdt=ordem["usdt"], status="failed",
                                erro=f"saldo USDT insuficiente: {bal_usdt:.6f} < {ordem['usdt']}")
         raise PaymentError(f"saldo USDT insuficiente ({bal_usdt:.6f} USDT) — necessário {ordem['usdt']} USDT")
     if bal_native <= 0:
-        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, network=network,
-                               token="USDT", usdt=ordem["usdt"], status="failed",
+        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, chave=chave,
+                               network=network, token="USDT", usdt=ordem["usdt"], status="failed",
                                erro="sem POL para pagar o gás da rede")
         raise PaymentError("carteira sem POL para pagar o gás — deposite POL para a taxa de rede")
 
     try:
         tx_hash = fund_order_polygon(deposit=ordem["deposit"], usdt=ordem["usdt"],
-                                     ordem=ordem["ordem"])
+                                     ordem=ordem["ordem"], pix_brl=pix_value, chave=chave)
     except Exception as e:
-        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, network=network,
-                               token="USDT", usdt=ordem["usdt"], status="failed", erro=str(e)[:200])
+        storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, chave=chave,
+                               network=network, token="USDT", usdt=ordem["usdt"],
+                               status="failed", erro=str(e)[:200])
         raise PaymentError(f"falha ao enviar o depósito: {str(e)[:160]}") from e
 
     status = poll_order(client, ordem["ordem"], network=network)
-    storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, network=network,
-                           token="USDT", usdt=ordem["usdt"], cupom=ordem["cupom"],
-                           fee_pct=ordem["fee_pct"], tx_hash=tx_hash,
+    storage.record_payment(ordem_id=ordem["ordem"], pix_brl=pix_value, chave=chave,
+                           network=network, token="USDT", usdt=ordem["usdt"],
+                           cupom=ordem["cupom"], fee_pct=ordem["fee_pct"], tx_hash=tx_hash,
                            status=status.get("status"), resgate=status.get("resgate"),
                            erro=status.get("msg"))
     return {"ordem": ordem["ordem"], "tx_hash": tx_hash, **status}

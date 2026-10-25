@@ -30,10 +30,21 @@ def _is_unresolved(p: dict) -> bool:
 
 
 def build_incident_email(p: dict, order_status: dict) -> tuple[str, str]:
+    import datetime
+
+    def _ts(v) -> str:
+        try:
+            return datetime.datetime.fromtimestamp(int(v)).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return "—"
+
+    agora = int(time.time())
     subject = (
         f"[NAKPIX ALERTA] Pix não concluído / Sem estorno / +{INCIDENT_MINUTES} minutos "
         f"— Transação {p.get('ordem_id') or p.get('tx_hash')}"
     )
+    bstatus = order_status.get("status") or p.get("status")
+    extornando = bstatus in ("extornando", "insuficiente")
     lines = [
         "NAKPIX — incidente de pendência financeira",
         "=" * 56,
@@ -43,10 +54,15 @@ def build_incident_email(p: dict, order_status: dict) -> tuple[str, str]:
         f"  ID do incidente: (ver sistema interno)",
         f"  Canal de origem: MCP",
         "",
+        "[Horários]",
+        f"  Criado em: {_ts(p.get('ts'))}",
+        f"  Detectado em: {_ts(agora)}",
+        f"  Limiar do alerta: {INCIDENT_MINUTES} minutos",
+        "",
         "[Pagamento Pix]",
         f"  Valor BRL: {p.get('pix_brl')}",
         f"  Chave Pix: {p.get('chave') or '—'}",
-        f"  Estado atual: {order_status.get('status') or p.get('status')}",
+        f"  Estado atual: {bstatus}",
         f"  Erro original: {order_status.get('erro') or p.get('erro') or '—'}",
         "",
         "[Blockchain]",
@@ -59,10 +75,15 @@ def build_incident_email(p: dict, order_status: dict) -> tuple[str, str]:
         f"  Fee %: {p.get('fee_pct')}",
         f"  Cupom: {p.get('cupom') or '—'}",
         "",
+        "[Situação do estorno]",
+        ("  Extorno em andamento (backend reporta 'extornando')."
+         if extornando else
+         "  Nenhum estorno confirmado até o momento."),
+        f"  Estado backend: {bstatus}",
+        "",
         "[Diagnóstico]",
         "  Fundos enviados (on-chain): sim (tx_hash presente)",
-        "  Pix confirmado: " + ("sim" if order_status.get("status") in ("sent", "done") else "não"),
-        "  Estorno confirmado: não (não há confirmação)",
+        "  Pix confirmado: " + ("sim" if bstatus in ("sent", "done") else "não"),
         "  Intervenção necessária: conciliar/estornar/confirmar manualmente",
     ]
     return subject, "\n".join(lines)
@@ -73,11 +94,11 @@ def scan_once(client: BackendClient | None = None) -> int:
     storage.init()
     client = client or BackendClient()
     created = 0
-    cutoff = time.time() - INCIDENT_MINUTES * 60
-    for p in storage.list_payments(limit=500):
+    cutoff = int(time.time() - INCIDENT_MINUTES * 60)
+    # Scan ALL unresolved ops older than the threshold (not just the 500 most
+    # recent), oldest first — so no unresolved payment is ever missed.
+    for p in storage.list_unresolved_payments(cutoff):
         if not _is_unresolved(p):
-            continue
-        if int(p.get("ts") or 0) > cutoff:
             continue
         ordem = p.get("ordem_id")
         order_status: dict = {}

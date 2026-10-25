@@ -88,14 +88,16 @@ def nakpix_create_wallet(network: str) -> dict:
 
 
 @mcp.tool()
-def nakpix_import_wallet(network: str, secret: str) -> dict:
-    """Import an existing wallet from a mnemonic or private key.
-    NOTE: pass the secret to the LOCAL wallet agent, not to the model context."""
-    try:
-        info = wallet.import_secret(network, secret)
-    except (wallet.WalletError, ValueError) as e:
-        return _err(str(e))
-    return {"status": "ok", **info}
+def nakpix_import_wallet(network: str) -> dict:
+    """Import an existing wallet. The secret (mnemonic/private key) must be
+    entered in the LOCAL wallet-agent CLI — never passed through the MCP."""
+    return {
+        "status": "blocked",
+        "msg": ("por segurança, a importação não aceita o segredo via MCP. "
+                "Rode no terminal:\n"
+                "  nakpix-wallet-agent import " + network + " '<mnemonic-ou-chave-privada>'\n"
+                "e depois consulte nakpix_wallet_status para confirmar."),
+    }
 
 
 @mcp.tool()
@@ -287,11 +289,15 @@ def nakpix_get_payment_status(ordem: str, network: str | None = None) -> dict:
 
 @mcp.tool()
 def nakpix_get_receipt(ordem: str, network: str | None = None) -> dict:
-    """Return the receipt URL for a completed order (needs the resgate code)."""
+    """Return the receipt URL for a completed order.
+
+    Only returns a URL when the backend reports a real resgate code (generated
+    server-side when the PIX is actually sent) — never a mounted URL from an
+    empty code."""
     network = network or _default_network()
     st = _client().order_status(ordem, network)
-    code = st.get("resgate") or ""
-    if st.get("status") not in ("sent", "done") and not code:
+    code = (st.get("resgate") or "").strip()
+    if not code:
         return {"status": "pendente",
                 "msg": "comprovante ainda não disponível — o Pix continua em processamento"}
     url = _client().receipt_url(code=code, txid=ordem, name="", valor=str(st.get("pix") or ""))

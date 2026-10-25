@@ -86,15 +86,20 @@ def run_due(client: BackendClient | None = None) -> int:
     executed = 0
     for s in storage.due_schedules(now):
         sched_id = s["id"]
-        # idempotency: skip if an occurrence for this due time already exists
+        # idempotency: skip if ANY occurrence exists for this due time
+        # (pending/running/failed/done). The unique index on
+        # (schedule_id, due_ts) makes the insert atomic across processes too,
+        # so a schedule can never fire twice for the same due time.
         with storage.conn() as c:
             exists = c.execute(
-                "SELECT COUNT(*) AS n FROM occurrences WHERE schedule_id=? AND due_ts=? AND status='done'",
+                "SELECT COUNT(*) AS n FROM occurrences WHERE schedule_id=? AND due_ts=?",
                 (sched_id, s["proxima_ocorrencia"]),
             ).fetchone()["n"]
         if exists:
             continue
         occ_id = storage.add_occurrence(sched_id, s["proxima_ocorrencia"])
+        if occ_id is None:   # raced with another run — already scheduled
+            continue
         storage.update_occurrence(occ_id, status="running", executed_ts=now)
         res: dict = {"status": "failed"}
         try:

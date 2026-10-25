@@ -101,6 +101,23 @@ def conn():
 def init() -> None:
     with conn() as c:
         c.executescript(_SCHEMA)
+        _migrate(c)
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """Idempotent migrations for databases created before a constraint was
+    added. Safe to run on every init()."""
+    # occurrences: enforce one row per (schedule_id, due_ts) so a schedule can
+    # never be executed twice for the same due time. Dedupe first (keep the
+    # earliest), then create the unique index (also covers fresh databases).
+    c.execute(
+        "DELETE FROM occurrences WHERE id NOT IN "
+        "(SELECT MIN(id) FROM occurrences GROUP BY schedule_id, due_ts)"
+    )
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_occ_unique "
+        "ON occurrences(schedule_id, due_ts)"
+    )
 
 
 def _now() -> int:
@@ -114,13 +131,43 @@ def record_payment(*, ordem_id: str | None = None, pix_brl: float, network: str,
                    chave: str | None = None, status: str = "created",
                    tx_hash: str | None = None, resgate: str | None = None,
                    erro: str | None = None) -> int:
+    """Upsert a payment row keyed by ``ordem_id``.
+
+    Optional fields are merged with COALESCE so a later partial update (e.g.
+    recording the tx hash right after broadcast, before the final status is
+    known) never wipes already-stored values (chave, valor BRL, cupom, resgate).
+    ``status`` is always set to the latest value passed.
+    """
     init()
     with conn() as c:
+        if ordem_id:
+            c.execute(
+                "INSERT INTO payments (ts, ordem_id, pix_brl, chave, network, token, "
+                "usdt, fee_pct, cupom, status, tx_hash, resgate, erro) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(ordem_id) DO UPDATE SET "
+                "ts=excluded.ts, "
+                "pix_brl=COALESCE(excluded.pix_brl, payments.pix_brl), "
+                "chave=COALESCE(excluded.chave, payments.chave), "
+                "network=COALESCE(excluded.network, payments.network), "
+                "token=COALESCE(excluded.token, payments.token), "
+                "usdt=COALESCE(excluded.usdt, payments.usdt), "
+                "fee_pct=COALESCE(excluded.fee_pct, payments.fee_pct), "
+                "cupom=COALESCE(excluded.cupom, payments.cupom), "
+                "status=excluded.status, "
+                "tx_hash=COALESCE(excluded.tx_hash, payments.tx_hash), "
+                "resgate=COALESCE(excluded.resgate, payments.resgate), "
+                "erro=COALESCE(excluded.erro, payments.erro)",
+                (_now(), ordem_id, pix_brl, chave, network, token, usdt, fee_pct, cupom,
+                 status, tx_hash, resgate, erro),
+            )
+            row = c.execute("SELECT id FROM payments WHERE ordem_id=?",
+                            (ordem_id,)).fetchone()
+            return row["id"] if row else 0
         cur = c.execute(
-            "INSERT OR REPLACE INTO payments (ts, ordem_id, pix_brl, chave, network, token, "
-            "usdt, fee_pct, cupom, status, tx_hash, resgate, erro) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (_now(), ordem_id, pix_brl, chave, network, token, usdt, fee_pct, cupom,
+            "INSERT INTO payments (ts, pix_brl, chave, network, token, usdt, fee_pct, "
+            "cupom, status, tx_hash, resgate, erro) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (_now(), pix_brl, chave, network, token, usdt, fee_pct, cupom,
              status, tx_hash, resgate, erro),
         )
         return cur.lastrowid
@@ -130,6 +177,22 @@ def list_payments(limit: int = 50) -> list[dict]:
     init()
     with conn() as c:
         rows = c.execute("SELECT * FROM payments ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_unresolved_payments(cutoff: int, limit: int = 2000) -> list[dict]:
+    """Payments with an on-chain tx_hash but no terminal status, older than
+    ``cutoff`` (oldest first). Used by the 15-min incident monitor so it never
+    misses an unresolved operation beyond a small recent window."""
+    init()
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM payments "
+            "WHERE tx_hash IS NOT NULL AND tx_hash != '' "
+            "AND status NOT IN ('sent','done','solucionado','refunded','extornado','resolved') "
+            "AND ts <= ? ORDER BY ts ASC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -194,14 +257,17 @@ def due_schedules(now: int | None = None) -> list[dict]:
 
 
 # ── occurrences ────────────────────────────────────────────────────────────
-def add_occurrence(schedule_id: int, due_ts: int) -> int:
+def add_occurrence(schedule_id: int, due_ts: int) -> int | None:
+    """Insert an occurrence, or return None if (schedule_id, due_ts) already
+    exists (unique index). Callers must treat None as 'already scheduled'."""
     init()
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO occurrences (schedule_id, due_ts, status) VALUES (?,?,'pending')",
+            "INSERT OR IGNORE INTO occurrences (schedule_id, due_ts, status) "
+            "VALUES (?,?,'pending')",
             (schedule_id, due_ts),
         )
-        return cur.lastrowid
+        return cur.lastrowid if cur.rowcount else None
 
 
 def get_occurrence(occurrence_id: int) -> dict | None:
