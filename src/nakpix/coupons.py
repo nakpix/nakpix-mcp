@@ -19,12 +19,12 @@ def remove_default_coupon() -> None:
 
 
 def validate_coupon(client: BackendClient, codigo: str, network: str | None = None) -> dict:
-    """Validate against the backend (source of truth). Returns coupon info.
+    """Validate against the backend (source of truth). Returns ONLY the fields
+    the user is allowed to see.
 
-    The backend also returns the coupon's commission `wallet` (an internal
-    affiliate destination). That field is DELIBERATELY dropped here — the agent
-    and the user only ever see `codigo`, `pct` (fee) and `usos` (usage count),
-    never the internal fee-routing wallet.
+    The backend also returns the coupon's commission `wallet` and the usage
+    count `usos` — both INTERNAL and deliberately DROPPED here. The agent/user
+    only ever see `codigo` and `pct` (the effective fee), nothing else.
     """
     r = client.validate_coupon(codigo, network)
     if not r.get("ok"):
@@ -32,7 +32,6 @@ def validate_coupon(client: BackendClient, codigo: str, network: str | None = No
     return {
         "codigo": r.get("codigo"),
         "pct": r.get("pct"),
-        "usos": r.get("usos"),
     }
 
 

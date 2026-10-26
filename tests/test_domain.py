@@ -41,12 +41,12 @@ def test_resolve_fee_auto_applies_default_coupon(isolated_home, fake_backend):
 
 def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
     # The backend returns the coupon's commission wallet (internal affiliate
-    # destination). It must NEVER reach the agent/user.
+    # destination) and the usage count `usos`. NEITHER may reach the agent/user.
     info = coupons.validate_coupon(fake_backend, "PARCEIRO10")
     assert "wallet" not in info
+    assert "usos" not in info
     assert info["codigo"] == "PARCEIRO10"
     assert info["pct"] == 1.5
-    assert info["usos"] == 0
 
 
 def test_quote_estimate():
