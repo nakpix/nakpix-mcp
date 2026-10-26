@@ -249,9 +249,10 @@ def nakpix_parse_pix(texto: str) -> dict:
 
 @mcp.tool()
 def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = None) -> dict:
-    """Cotação vinda do backend (fonte de verdade). Só campos de cliente:
-    valor do PIX, fee do cupom, câmbio e USDT necessário. O MCP não calcula
-    custo — pergunta ao server 'pix + cupom' e recebe o USDT."""
+    """Cotação vinda do backend (fonte de verdade). Devolve SÓ o que o cliente
+    pode ver: valor do PIX (pix_brl) e o USDT necessário (usdt_necessario), mais
+    cupom + desconto. NUNCA devolve fee %, câmbio ou custo interno — isso é
+    dado que o cliente não precisa e o MCP não deve expor."""
     network = network or _default_network()
     try:
         cost = payments_mod.estimate(_client(), pix_value, cupom or None, network)
@@ -259,8 +260,6 @@ def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = No
         return _err(str(e)[:160])
     return {"status": "ok", "network": network,
             "pix_brl": cost.get("pix_brl"),
-            "fee_pct": cost.get("fee_pct"),
-            "cambio": cost.get("cambio"),
             "usdt_necessario": cost.get("usdt"),
             "cupom": cost.get("cupom") or "",
             "desconto": cost.get("desconto") or 0}
