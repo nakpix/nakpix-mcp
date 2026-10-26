@@ -47,6 +47,8 @@ def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
     assert "usos" not in info
     assert info["codigo"] == "PARCEIRO10"
     assert info["pct"] == 1.5
+    # desconto é o que o usuário vê (fee pct fica só interno pro quote)
+    assert "desconto" in info
 
 
 def test_quote_estimate():

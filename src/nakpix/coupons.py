@@ -19,12 +19,12 @@ def remove_default_coupon() -> None:
 
 
 def validate_coupon(client: BackendClient, codigo: str, network: str | None = None) -> dict:
-    """Validate against the backend (source of truth). Returns ONLY the fields
-    the user is allowed to see.
+    """Validate against the backend (source of truth). Returns the fields the
+    system needs: `codigo`, `pct` (fee, used INTERNALLY by resolve_fee to build
+    the quote) and `desconto` (what the user is told).
 
-    The backend also returns the coupon's commission `wallet` and the usage
-    count `usos` — both INTERNAL and deliberately DROPPED here. The agent/user
-    only ever see `codigo` and `pct` (the effective fee), nothing else.
+    The backend's commission `wallet` and usage count `usos` are INTERNAL and
+    never surface — neither here nor in the agent-facing tool.
     """
     r = client.validate_coupon(codigo, network)
     if not r.get("ok"):
@@ -32,6 +32,7 @@ def validate_coupon(client: BackendClient, codigo: str, network: str | None = No
     return {
         "codigo": r.get("codigo"),
         "pct": r.get("pct"),
+        "desconto": r.get("desconto"),
     }
 
 

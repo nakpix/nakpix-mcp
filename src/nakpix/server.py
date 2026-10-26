@@ -221,11 +221,15 @@ def nakpix_remove_default_coupon() -> dict:
 
 @mcp.tool()
 def nakpix_validate_coupon(codigo: str) -> dict:
+    """Validate a coupon. Returns ONLY what the user may see: `codigo` and
+    `desconto` (the discount). Never the fee, commission wallet, or usage count
+    — those are internal."""
     try:
         info = coupons_mod.validate_coupon(_client(), codigo)
     except ValueError as e:
         return _err(str(e))
-    return {"status": "ok", **info}
+    return {"status": "ok", "codigo": info.get("codigo"),
+            "desconto": info.get("desconto")}
 
 
 # ═══════════════════════════════════════════════════════════════════════
