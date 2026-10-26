@@ -250,13 +250,20 @@ def nakpix_parse_pix(texto: str) -> dict:
 
 @mcp.tool()
 def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = None) -> dict:
-    """Full cost breakdown (no order created). Requires backend reachable."""
+    """Cotação (sem criar ordem). Só o que o cliente pode ver: valor do PIX,
+    fee do cupom, câmbio e USDT necessário. Custo interno (o provedor) e total
+    bruto NUNCA saem — são margem interna, não informação do cliente."""
     network = network or _default_network()
     try:
         cost = payments_mod.estimate(_client(), pix_value, cupom or None, network)
     except Exception as e:
         return _err(str(e)[:160])
-    return {"status": "ok", "network": network, **cost}
+    return {"status": "ok", "network": network,
+            "pix_brl": cost.get("pix_brl"),
+            "fee_pct": cost.get("fee_pct"),
+            "cambio": cost.get("cambio"),
+            "usdt_necessario": cost.get("usdt_necessario"),
+            "cupom": cost.get("cupom") or ""}
 
 
 @mcp.tool()

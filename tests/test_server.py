@@ -58,3 +58,17 @@ def test_confirmation_preference(isolated_home):
     assert server.nakpix_get_payment_confirmation()["payment_confirmation_enabled"] is True
     server.nakpix_set_payment_confirmation(False)
     assert server.nakpix_get_payment_confirmation()["payment_confirmation_enabled"] is False
+
+
+def test_get_quote_no_internal_leak(isolated_home, fake_backend, monkeypatch):
+    # A cotação NUNCA pode expor custo interno (o provedor), total bruto, nivel0
+    # ou fee em R$ — só valor do PIX, fee do cupom, câmbio, USDT e cupom.
+    monkeypatch.setattr(server, "_client", lambda: fake_backend)
+    r = server.nakpix_get_quote(100.0, cupom="PARCEIRO10")
+    assert r["status"] == "ok"
+    for f in ("pix_brl", "fee_pct", "cambio", "usdt_necessario", "cupom"):
+        assert f in r, f"faltou campo de cliente: {f}"
+    for f in ("custo_o provedor_brl", "bruto_brl", "nivel0_brl", "fee_brl"):
+        assert f not in r, f"vazou campo interno: {f}"
+    assert r["fee_pct"] == 1.5
+    assert r["cupom"] == "PARCEIRO10"
