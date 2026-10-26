@@ -61,13 +61,18 @@ def test_confirmation_preference(isolated_home):
 
 
 def test_get_quote_no_internal_leak(isolated_home, fake_backend, monkeypatch):
-    # A cotação NUNCA pode expor fee %, câmbio ou custo interno — só valor do
-    # PIX, USDT necessário, cupom e desconto.
+    # A cotação NUNCA pode expor custo interno (o provedor/total bruto/margem).
+    # Expõe só: valor, USDT, câmbio, cupom+desconto e a conta da taxa
+    # (fee_base - desconto = fee_final).
     monkeypatch.setattr(server, "_client", lambda: fake_backend)
     r = server.nakpix_get_quote(100.0, cupom="PARCEIRO10")
     assert r["status"] == "ok"
-    for f in ("pix_brl", "usdt_necessario", "cupom", "desconto"):
+    for f in ("pix_brl", "usdt_necessario", "cambio", "cupom", "desconto", "fee_final", "fee_base"):
         assert f in r, f"faltou campo de cliente: {f}"
-    for f in ("fee_pct", "cambio", "custo_o provedor_brl", "bruto_brl", "nivel0_brl", "fee_brl"):
+    for f in ("fee_pct", "custo_o provedor_brl", "bruto_brl", "nivel0_brl", "fee_brl"):
         assert f not in r, f"vazou campo interno: {f}"
     assert r["cupom"] == "PARCEIRO10"
+    assert r["fee_final"] == 1.5
+    assert r["desconto"] == 2.5
+    assert r["fee_base"] == 4.0
+    assert r["cambio"] == 5.0

@@ -249,20 +249,30 @@ def nakpix_parse_pix(texto: str) -> dict:
 
 @mcp.tool()
 def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = None) -> dict:
-    """Cotação vinda do backend (fonte de verdade). Devolve SÓ o que o cliente
-    pode ver: valor do PIX (pix_brl) e o USDT necessário (usdt_necessario), mais
-    cupom + desconto. NUNCA devolve fee %, câmbio ou custo interno — isso é
-    dado que o cliente não precisa e o MCP não deve expor."""
+    """Cotação vinda do backend (fonte de verdade). Devolve o que o cliente vê:
+    valor do PIX (pix_brl), USDT necessário (usdt_necessario), câmbio
+    (1 USDT = R$ cambio), cupom + desconto e a conta da taxa
+    (fee_base - desconto = fee_final). NUNCA devolve custo interno (o provedor),
+    total bruto ou margem — isso não chega ao MCP."""
     network = network or _default_network()
     try:
         cost = payments_mod.estimate(_client(), pix_value, cupom or None, network)
     except Exception as e:
         return _err(str(e)[:160])
+    fee_final = float(cost.get("fee_pct") or 0)
+    desconto = float(cost.get("desconto") or 0)
+    fee_base = cost.get("fee_base")
+    if fee_base is None:
+        # backend antigo (sem fee_base): deriva como fallback temporário
+        fee_base = fee_final + desconto
     return {"status": "ok", "network": network,
             "pix_brl": cost.get("pix_brl"),
             "usdt_necessario": cost.get("usdt"),
+            "cambio": cost.get("cambio"),
             "cupom": cost.get("cupom") or "",
-            "desconto": cost.get("desconto") or 0}
+            "desconto": desconto,
+            "fee_final": fee_final,
+            "fee_base": float(fee_base)}
 
 
 @mcp.tool()
