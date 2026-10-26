@@ -323,7 +323,7 @@ def nakpix_get_receipt(ordem: str, network: str | None = None) -> dict:
     if not code:
         return {"status": "pendente",
                 "msg": "comprovante ainda não disponível — o Pix continua em processamento"}
-    url = _client().receipt_url(code=code, txid=ordem, name="", valor=str(st.get("pix") or ""))
+    url = _client().receipt_url(code=code)
     return {"status": st.get("status"), "resgate": code, "receipt_url": url}
 
 

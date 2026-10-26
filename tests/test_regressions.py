@@ -129,13 +129,13 @@ def test_get_receipt_ok_com_resgate(isolated_home, monkeypatch):
             return {"status": "sent", "resgate": "NAK-ABC", "pix": "10.00"}
 
         def receipt_url(self, **kw):
-            return "http://x/comprovante?code=" + kw["code"] + "&txid=" + kw["txid"]
+            return "http://x/comprovante?code=" + kw["code"]
 
     monkeypatch.setattr(server, "_client", lambda: ComResgate())
     r = server.nakpix_get_receipt("PIXTEST")
     assert r["status"] == "sent"
     assert r["resgate"] == "NAK-ABC"
-    assert "code=NAK-ABC" in r["receipt_url"]
+    assert r["receipt_url"] == "http://x/comprovante?code=NAK-ABC"
 
 
 # ── 5. incidents: full scan + email completeness ──────────────────────────

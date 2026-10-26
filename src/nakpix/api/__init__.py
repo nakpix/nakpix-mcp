@@ -126,10 +126,10 @@ class BackendClient:
     def resolve_qr(self, brcode: str, network: str | None = None) -> dict:
         return self._post("/pix-qr-resolve", {"brcode": brcode}, network)
 
-    def receipt_url(self, *, code: str, txid: str, name: str, valor: str, network: str | None = None) -> str:
+    def receipt_url(self, *, code: str, network: str | None = None) -> str:
         from urllib.parse import urlencode
 
-        qs = urlencode({"code": code, "txid": txid, "name": name, "valor": valor})
+        qs = urlencode({"code": code})
         return f"{self.url('/comprovante', network)}?{qs}"
 
     def close(self) -> None:
