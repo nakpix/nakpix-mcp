@@ -48,6 +48,12 @@ class FakeBackend:
             "total_brl": brl, "total_pxusdt": brl / 5.0, "data": {}}
         }
 
+    def pix_quote(self, brl, cupom="", network=None):
+        # backend /pix-quote -> campos de cliente (o MCP NAO calcula custo)
+        fee = 1.5 if cupom == "PARCEIRO10" else 4.0
+        return {"pix_brl": float(brl), "usdt": round(float(brl) / 5.0, 6),
+                "fee_pct": fee, "cambio": 5.0, "cupom": cupom, "desconto": 0}
+
     def validate_coupon(self, codigo, network=None):
         if codigo == "PARCEIRO10":
             return {"ok": True, "codigo": codigo, "pct": 1.5, "wallet": "0x..", "usos": 0}

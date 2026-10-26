@@ -16,7 +16,6 @@ import time
 
 from .api import BackendClient
 from . import coupons as coupons_mod
-from . import quotes as quotes_mod
 from . import storage
 from .wallet_agent import manager as wallet
 
@@ -43,16 +42,9 @@ class BroadcastUncertain(Exception):
         self.detail = detail
 
 
-def _resolve_coupon_fee(client: BackendClient, cupom: str | None, network: str | None) -> tuple[float, str]:
-    return coupons_mod.resolve_fee(client, cupom, network)
-
-
 def estimate(client: BackendClient, pix_value: float, cupom: str | None = None, network: str | None = None) -> dict:
-    """Full cost breakdown WITHOUT creating an order."""
-    fee_pct, eff_coupon = _resolve_coupon_fee(client, cupom, network)
-    cost = quotes_mod.full_quote(client, pix_value, fee_pct, network)
-    cost["cupom"] = eff_coupon
-    return cost
+    """Cotação vinda do backend (fonte de verdade). Só campos de cliente."""
+    return client.pix_quote(pix_value, coupons_mod.effective_coupon(cupom), network)
 
 
 def create_order(
@@ -64,17 +56,16 @@ def create_order(
     extorno: str = "",
     network: str | None = None,
 ) -> dict:
-    fee_pct, eff_coupon = _resolve_coupon_fee(client, cupom, network)
     r = client.create_order(
         pix_value=pix_value,
         chave=chave,
-        cupom=eff_coupon,
-        fee=fee_pct if eff_coupon else None,
+        cupom=coupons_mod.effective_coupon(cupom),
+        fee=None,
         extorno=extorno,
         network=network,
     )
     return {"ordem": r["ordem"], "deposit": r["deposit"], "usdt": r["usdt"],
-            "expira": r.get("expira"), "cupom": eff_coupon, "fee_pct": fee_pct}
+            "expira": r.get("expira"), "cupom": r.get("cupom") or "", "fee_pct": r.get("fee_pct")}
 
 
 def _usdt_transfer_data(to_address: str, amount_usdt: float) -> str:

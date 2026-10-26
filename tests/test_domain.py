@@ -28,15 +28,12 @@ def test_default_coupon(isolated_home):
     assert coupons.get_default_coupon() is None
 
 
-def test_resolve_fee_auto_applies_default_coupon(isolated_home, fake_backend):
+def test_effective_coupon(isolated_home):
+    assert coupons.effective_coupon(None) == ""           # sem default
     coupons.set_default_coupon("PARCEIRO10")
-    fee, code = coupons.resolve_fee(fake_backend, None)
-    assert code == "PARCEIRO10"
-    assert fee == 1.5
-    # unknown explicit coupon -> base fee (no silent fallback to default)
-    fee2, code2 = coupons.resolve_fee(fake_backend, "OUTRO")
-    assert code2 == ""
-    assert fee2 == 4.0
+    assert coupons.effective_coupon(None) == "PARCEIRO10"  # default aplicado
+    assert coupons.effective_coupon("OUTRO") == "OUTRO"    # explicito vence
+    assert coupons.effective_coupon("  spaced  ") == "spaced"  # strip
 
 
 def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
@@ -51,13 +48,13 @@ def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
     assert "desconto" in info
 
 
-def test_quote_estimate():
-    quote = {"total_brl": 100.0, "total_pxusdt": 20.0}  # 5 BRL/USDT
-    cost = quotes.estimate_cost(100.0, 1.5, quote)
-    # nivel0 = 100/(1-0.015) = 101.5228; bruto = (101.5228+0.17)/0.99 = 102.72; usdt = 102.72/5 = 20.54
-    assert cost["usdt_necessario"] > 20.0
-    assert cost["fee_pct"] == 1.5
-    assert cost["cambio"] == 5.0
+def test_get_quote_uses_backend(isolated_home, fake_backend):
+    # o MCP NAO calcula custo — pergunta ao backend /pix-quote
+    q = quotes.get_quote(fake_backend, 100.0, "PARCEIRO10")
+    assert q["usdt"] > 0
+    assert q["fee_pct"] == 1.5
+    assert q["cupom"] == "PARCEIRO10"
+    assert q["cambio"] == 5.0
 
 
 def test_storage_payments(isolated_home):

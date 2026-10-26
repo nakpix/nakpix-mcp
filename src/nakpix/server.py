@@ -15,7 +15,6 @@ from . import contacts as contacts_mod
 from . import coupons as coupons_mod
 from . import payments as payments_mod
 from . import pix as pix_mod
-from . import quotes as quotes_mod
 from . import storage
 from .api import BackendClient
 from .incidents import MAX_EMAIL_ATTEMPTS
@@ -250,9 +249,9 @@ def nakpix_parse_pix(texto: str) -> dict:
 
 @mcp.tool()
 def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = None) -> dict:
-    """Cotação (sem criar ordem). Só o que o cliente pode ver: valor do PIX,
-    fee do cupom, câmbio e USDT necessário. Custo interno (o provedor) e total
-    bruto NUNCA saem — são margem interna, não informação do cliente."""
+    """Cotação vinda do backend (fonte de verdade). Só campos de cliente:
+    valor do PIX, fee do cupom, câmbio e USDT necessário. O MCP não calcula
+    custo — pergunta ao server 'pix + cupom' e recebe o USDT."""
     network = network or _default_network()
     try:
         cost = payments_mod.estimate(_client(), pix_value, cupom or None, network)
@@ -262,8 +261,9 @@ def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = No
             "pix_brl": cost.get("pix_brl"),
             "fee_pct": cost.get("fee_pct"),
             "cambio": cost.get("cambio"),
-            "usdt_necessario": cost.get("usdt_necessario"),
-            "cupom": cost.get("cupom") or ""}
+            "usdt_necessario": cost.get("usdt"),
+            "cupom": cost.get("cupom") or "",
+            "desconto": cost.get("desconto") or 0}
 
 
 @mcp.tool()

@@ -54,6 +54,9 @@ class BackendClient:
     def quote(self, brl: float, network: str | None = None) -> dict:
         return self._get("/pix-quote-brl", network, brl=f"{brl:.2f}")
 
+    def pix_quote(self, brl: float, cupom: str = "", network: str | None = None) -> dict:
+        return self._get("/pix-quote", network, brl=f"{brl:.2f}", cupom=cupom)
+
     def validate_coupon(self, codigo: str, network: str | None = None) -> dict:
         return self._get("/cupom-check", network, c=codigo)
 
