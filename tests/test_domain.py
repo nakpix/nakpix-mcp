@@ -39,6 +39,16 @@ def test_resolve_fee_auto_applies_default_coupon(isolated_home, fake_backend):
     assert fee2 == 4.0
 
 
+def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
+    # The backend returns the coupon's commission wallet (internal affiliate
+    # destination). It must NEVER reach the agent/user.
+    info = coupons.validate_coupon(fake_backend, "PARCEIRO10")
+    assert "wallet" not in info
+    assert info["codigo"] == "PARCEIRO10"
+    assert info["pct"] == 1.5
+    assert info["usos"] == 0
+
+
 def test_quote_estimate():
     quote = {"total_brl": 100.0, "total_pxusdt": 20.0}  # 5 BRL/USDT
     cost = quotes.estimate_cost(100.0, 1.5, quote)
