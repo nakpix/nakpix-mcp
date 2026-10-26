@@ -93,8 +93,7 @@ def fund_order_polygon(*, deposit: str, usdt: float, ordem: str, pix_brl: float,
 
     chain = get_chain()
     w3 = chain._w3_live()
-    nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(addr), "pending")
-    gas_price = w3.eth.gas_price
+    nonce, gas_price = chain.get_tx_params(addr)
     tx = {
         "chainId": POLYGON_CHAIN_ID,
         "nonce": nonce,
