@@ -50,15 +50,15 @@ class FakeBackend:
 
     def pix_quote(self, brl, cupom="", network=None):
         # backend /pix-quote -> campos de cliente (o MCP NAO calcula custo)
-        fee = 1.5 if cupom == "PARCEIRO10" else 4.0
-        desconto = 2.5 if cupom == "PARCEIRO10" else 0.0
+        fee = 6.0 if cupom == "TESTE10" else 9.0
+        desconto = 3.0 if cupom == "TESTE10" else 0.0
         return {"pix_brl": float(brl), "usdt": round(float(brl) / 5.0, 6),
-                "fee_pct": fee, "fee_base": 4.0, "cambio": 5.0,
+                "fee_pct": fee, "fee_base": 9.0, "cambio": 5.0,
                 "cupom": cupom, "desconto": desconto}
 
     def validate_coupon(self, codigo, network=None):
-        if codigo == "PARCEIRO10":
-            return {"ok": True, "codigo": codigo, "pct": 1.5, "wallet": "0x..", "usos": 0}
+        if codigo == "TESTE10":
+            return {"ok": True, "codigo": codigo, "pct": 6.0, "wallet": "0x..", "usos": 0}
         return {"ok": False, "msg": "invalid coupon", "pct": 5.0}
 
     def create_order(self, **kw):

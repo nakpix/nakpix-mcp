@@ -28,10 +28,13 @@ async def main():
             print(json.dumps(await call(s, "nakpix_wallet_status"), ensure_ascii=False))
             print("\n== 3) cria carteira polygon (local) ==")
             print(json.dumps(await call(s, "nakpix_create_wallet", {"network": "polygon"}), ensure_ascii=False))
-            print("\n== 4) valida cupom 'COUPOMTEST' (backend REAL) ==")
-            print(json.dumps(await call(s, "nakpix_validate_coupon", {"codigo": "COUPOMTEST"}), ensure_ascii=False))
-            print("\n== 5) cotação R$100 c/ cupom COUPOMTEST (backend REAL) ==")
-            print(json.dumps(await call(s, "nakpix_get_quote", {"pix_value": 100.0, "cupom": "COUPOMTEST"}), ensure_ascii=False))
+            import os as _os
+            _cupom = _os.environ.get("NAKPIX_TEST_COUPON", "")
+            if not _cupom:
+                print("\n== 4) pulado: defina NAKPIX_TEST_COUPON p/ testar cupom ==")
+            print(json.dumps(await call(s, "nakpix_validate_coupon", {"codigo": _cupom}), ensure_ascii=False)) if _cupom else None
+            print(f"\n== 5) cotação R$100 c/ cupom (backend REAL) ==")
+            print(json.dumps(await call(s, "nakpix_get_quote", {"pix_value": 100.0, "cupom": _cupom}), ensure_ascii=False)) if _cupom else None
             print("\n== 6) saldo on-chain (Polygon, carteira nova = 0) ==")
             print(json.dumps(await call(s, "nakpix_get_balances", {"network": "polygon"}), ensure_ascii=False))
 

@@ -1,7 +1,7 @@
 """Quote — sourced from the backend (single source of truth).
 
 The MCP does NOT compute cost. It asks the server: "PIX de X BRL com cupom Y"
-and the server returns the USDT needed. Internal cost (o provedor, base fee,
+and the server returns the USDT needed. Internal cost (provider, base fee,
 margin) lives ONLY on the server — the MCP never knows that formula.
 """
 

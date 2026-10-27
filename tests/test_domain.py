@@ -22,16 +22,16 @@ def test_contacts_crud(isolated_home):
 
 def test_default_coupon(isolated_home):
     assert coupons.get_default_coupon() is None
-    coupons.set_default_coupon("PARCEIRO10")
-    assert coupons.get_default_coupon() == "PARCEIRO10"
+    coupons.set_default_coupon("TESTE10")
+    assert coupons.get_default_coupon() == "TESTE10"
     coupons.remove_default_coupon()
     assert coupons.get_default_coupon() is None
 
 
 def test_effective_coupon(isolated_home):
     assert coupons.effective_coupon(None) == ""           # sem default
-    coupons.set_default_coupon("PARCEIRO10")
-    assert coupons.effective_coupon(None) == "PARCEIRO10"  # default aplicado
+    coupons.set_default_coupon("TESTE10")
+    assert coupons.effective_coupon(None) == "TESTE10"  # default aplicado
     assert coupons.effective_coupon("OUTRO") == "OUTRO"    # explicito vence
     assert coupons.effective_coupon("  spaced  ") == "spaced"  # strip
 
@@ -39,21 +39,21 @@ def test_effective_coupon(isolated_home):
 def test_validate_coupon_does_not_leak_wallet(isolated_home, fake_backend):
     # The backend returns the coupon's commission wallet (internal affiliate
     # destination) and the usage count `usos`. NEITHER may reach the agent/user.
-    info = coupons.validate_coupon(fake_backend, "PARCEIRO10")
+    info = coupons.validate_coupon(fake_backend, "TESTE10")
     assert "wallet" not in info
     assert "usos" not in info
-    assert info["codigo"] == "PARCEIRO10"
-    assert info["pct"] == 1.5
+    assert info["codigo"] == "TESTE10"
+    assert info["pct"] == 6.0
     # desconto é o que o usuário vê (fee pct fica só interno pro quote)
     assert "desconto" in info
 
 
 def test_get_quote_uses_backend(isolated_home, fake_backend):
     # o MCP NAO calcula custo — pergunta ao backend /pix-quote
-    q = quotes.get_quote(fake_backend, 100.0, "PARCEIRO10")
+    q = quotes.get_quote(fake_backend, 100.0, "TESTE10")
     assert q["usdt"] > 0
-    assert q["fee_pct"] == 1.5
-    assert q["cupom"] == "PARCEIRO10"
+    assert q["fee_pct"] == 6.0
+    assert q["cupom"] == "TESTE10"
     assert q["cambio"] == 5.0
 
 

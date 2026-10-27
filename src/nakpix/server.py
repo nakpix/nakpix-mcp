@@ -252,7 +252,7 @@ def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = No
     """Cotação vinda do backend (fonte de verdade). Devolve o que o cliente vê:
     valor do PIX (pix_brl), USDT necessário (usdt_necessario), câmbio
     (1 USDT = R$ cambio), cupom + desconto e a conta da taxa
-    (fee_base - desconto = fee_final). NUNCA devolve custo interno (o provedor),
+    (fee_base - desconto = fee_final). NUNCA devolve custo interno,
     total bruto ou margem — isso não chega ao MCP."""
     network = network or _default_network()
     try:
