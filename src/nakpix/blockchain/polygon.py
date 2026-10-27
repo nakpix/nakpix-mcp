@@ -40,7 +40,7 @@ class PolygonChain:
                 return w3
             except Exception:
                 self._idx = (self._idx + 1) % len(self._rpcs)
-        return self._w3
+        raise RuntimeError("nenhum RPC Polygon responde (todos indisponiveis)")
 
     def _call(self, fn):
         """Executa ``fn(w3)`` com failover: troca de RPC a cada falha/timeout."""
@@ -133,7 +133,8 @@ class PolygonChain:
         """On-chain state of a broadcast transaction hash.
 
         Returns one of:
-          - ``"mined"``    — in a block (funds definitively sent);
+          - ``"mined"``    — in a block AND receipt.status == 1
+          (funds definitively sent; a REVERTED tx is NOT a transfer);
           - ``"pending"``  — in the mempool (not yet confirmed);
           - ``"notfound"`` — not on-chain and not in the mempool (definitively
             never broadcast / already dropped);
@@ -152,7 +153,15 @@ class PolygonChain:
             if tx is None:
                 return "notfound"
             if tx.get("blockNumber") is not None:
-                return "mined"
+                try:
+                    rc = w3.eth.get_transaction_receipt(tx_hash)
+                except Exception:
+                    self._idx = (self._idx + 1) % len(self._rpcs)
+                    continue   # receipt indisponivel NESTE rpc — tenta o próximo
+                if rc is None:
+                    return "pending"   # bloco ainda nao finalizado neste rpc
+                # status 0 = REVERTED: inclusa em bloco, mas NAO transferiu
+                return "mined" if rc.get("status") == 1 else "failed"
             return "pending"
         return "unknown"
 

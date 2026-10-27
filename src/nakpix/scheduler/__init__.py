@@ -150,7 +150,7 @@ def _tx_state(tx_hash: str) -> str:
 
     Thin wrapper around the blockchain client so tests can monkeypatch it.
     """
-    from .blockchain.polygon import get_chain
+    from ..blockchain.polygon import get_chain
 
     return get_chain().get_tx_state(tx_hash)
 

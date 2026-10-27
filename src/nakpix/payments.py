@@ -130,7 +130,10 @@ def poll_order(client: BackendClient, ordem: str, timeout: int = 300, network: s
         try:
             st = client.order_status(ordem, network)
         except Exception as e:
-            last = {"status": "err", "msg": str(e)[:120]}
+            # timeout/erro de COMUNICACAO — resultado inconclusivo.
+            # "err" eh classificado como falha DEFINITIVA pelo scheduler;
+            # sem confirmacao do backend NAO ha classificacao financeira.
+            last = {"status": "unknown", "msg": str(e)[:120]}
             break
         last = st
         if st.get("status") in ("sent", "done", "erro", "err"):
