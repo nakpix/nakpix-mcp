@@ -247,6 +247,24 @@ def nakpix_parse_pix(texto: str) -> dict:
     return r or _err("não identifiquei chave/valor nesse texto")
 
 
+
+
+# Campos permitidos nas respostas de consulta (o que o frontend mostra ao
+# cliente). O restante do payload do backend NAO entra no contexto do agente —
+# defensivo: se o backend um dia crescer um campo interno, ele nao vaza.
+_BACKEND_PUBLIC_FIELDS = (
+    "status", "pix", "pix_brl", "usdt", "deposit", "resgate", "ordem",
+    "expira", "erro", "msg", "tx_hash", "txid", "quando", "rede",
+    "network", "cupom", "desconto", "fee_final", "fee_base", "cambio",
+)
+
+
+def _filter_backend(payload: dict) -> dict:
+    """Deixa passar apenas os campos públicos de cliente."""
+    if not isinstance(payload, dict):
+        return payload
+    return {k: v for k, v in payload.items() if k in _BACKEND_PUBLIC_FIELDS}
+
 @mcp.tool()
 def nakpix_get_quote(pix_value: float, cupom: str = "", network: str | None = None) -> dict:
     """Cotação vinda do backend (fonte de verdade). Devolve o que o cliente vê:
@@ -305,7 +323,7 @@ def nakpix_pay_pix(
 def nakpix_get_payment_status(ordem: str, network: str | None = None) -> dict:
     network = network or _default_network()
     try:
-        return _client().order_status(ordem, network)
+        return _filter_backend(_client().order_status(ordem, network))
     except Exception as e:
         return _err(str(e)[:160])
 
@@ -318,7 +336,7 @@ def nakpix_get_receipt(ordem: str, network: str | None = None) -> dict:
     server-side when the PIX is actually sent) — never a mounted URL from an
     empty code."""
     network = network or _default_network()
-    st = _client().order_status(ordem, network)
+    st = _filter_backend(_client().order_status(ordem, network))
     code = (st.get("resgate") or "").strip()
     if not code:
         return {"status": "pendente",
@@ -337,7 +355,7 @@ def nakpix_get_transaction_details(ordem: str, network: str | None = None) -> di
     network = network or _default_network()
     p = storage.get_payment(ordem)
     try:
-        st = _client().order_status(ordem, network)
+        st = _filter_backend(_client().order_status(ordem, network))
     except Exception:
         st = {}
     return {"local": p, "backend": st}

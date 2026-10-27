@@ -28,8 +28,8 @@ and incident handling.
 
 ## Cost rule (fixed, house rule)
 
-
-
+Costs are computed by the backend — the MCP never knows or exposes internal
+costs. A coupon's `pct` is the fee applied to the liquid PIX amount.
 
 ## Networks
 
