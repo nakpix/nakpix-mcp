@@ -47,7 +47,27 @@ def _default_network() -> str:
 
 
 def _err(msg: str) -> dict:
-    return {"status": "err", "msg": msg}
+    return {"status": "err", "msg": _sanitize_msg(msg)}
+
+
+# Mensagens de erro que NÃO devem chegar ao agente: nomes de infraestrutura,
+# provedores, hosts, IPs, caminhos internos. Motivos legítimos de falha
+# (saldo insuficiente, chave inválida, ordem expirada, manutenção etc.)
+# passam intocados — só o que é de infra/terceiro é neutralizado.
+_INTERNAL_HINTS = (
+    "smartpay", "connect.", ".com.vc", "nginx", "cloudflare", "upstream",
+    "relay.py", "/opt/", "127.0.0.1", "localhost:", "0.0.0.0", "ssh", "root@",
+)
+
+
+def _sanitize_msg(msg: str) -> str:
+    m = str(msg or "")
+    low = m.lower()
+    for hint in _INTERNAL_HINTS:
+        if hint in low:
+            # mantém o lado útil (status/HTTP) e descarta o detalhe interno
+            return "falha de comunicação com o backend — tente novamente"
+    return m
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -316,7 +336,12 @@ def nakpix_pay_pix(
         return _err(str(e))
     except Exception as e:
         return _err(str(e)[:200])
-    return {"status": "ok", **result}
+    # whitelist dupla: pay_pix já filtra, mas o wrapper não espalha o dict cru —
+    # um campo interno que porventura passe pelo pay_pix morre AQUI.
+    _pay_public = ("status", "ordem", "tx_hash", "pix", "pix_brl", "usdt",
+                   "resgate", "deposit", "expira", "erro", "msg", "txid",
+                   "quando", "cupom", "desconto")
+    return {"status": "ok", **{k: v for k, v in result.items() if k in _pay_public}}
 
 
 @mcp.tool()

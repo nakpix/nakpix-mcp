@@ -204,4 +204,9 @@ def pay_pix(
                            cupom=ordem["cupom"], fee_pct=ordem["fee_pct"], tx_hash=tx_hash,
                            status=status.get("status"), resgate=status.get("resgate"),
                            erro=status.get("msg"))
-    return {"ordem": ordem["ordem"], "tx_hash": tx_hash, **status}
+    # Só campos públicos na resposta ao agente — o payload completo do backend
+    # (que um dia pode crescer um campo interno) nunca vaza por aqui.
+    _public = ("status", "pix", "pix_brl", "usdt", "resgate", "deposit",
+               "expira", "erro", "msg", "txid", "quando", "cupom", "desconto")
+    return {"ordem": ordem["ordem"], "tx_hash": tx_hash,
+            **{k: v for k, v in status.items() if k in _public}}
